@@ -30,8 +30,13 @@
 
 import { apiUrl } from './cribl';
 
-/** AGENTS.md: search endpoints use the `default_search` group. */
-export const SEARCH_BASE = '/m/default_search/search';
+/** Default search worker group. Overridable per call — policies.yml is
+ *  written for any `:gid`, so nothing requires it to be `default_search`. */
+export const DEFAULT_SEARCH_GROUP = 'default_search';
+
+export function searchBase(group: string = DEFAULT_SEARCH_GROUP): string {
+  return `/m/${encodeURIComponent(group)}/search`;
+}
 
 export interface JobTimings {
   id: string;
@@ -83,6 +88,8 @@ export interface TimedRunOptions {
   pollIntervalMs?: number;
   /** Give wide windows on small engines room to finish. */
   timeoutMs?: number;
+  /** Search worker group to run against. */
+  searchGroup?: string;
   signal?: AbortSignal;
 }
 
@@ -95,8 +102,8 @@ export class PerfRunError extends Error {
   }
 }
 
-function base(): string {
-  return `${apiUrl().replace(/\/$/, '')}${SEARCH_BASE}`;
+function base(group: string): string {
+  return `${apiUrl().replace(/\/$/, '')}${searchBase(group)}`;
 }
 
 function firstItem(payload: unknown): Record<string, unknown> {
@@ -185,12 +192,13 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 async function call(
+  group: string,
   method: string,
   path: string,
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<string> {
-  const response = await fetch(`${base()}${path}`, {
+  const response = await fetch(`${base(group)}${path}`, {
     method,
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -216,13 +224,14 @@ export async function runTimedQuery(query: string, options: TimedRunOptions): Pr
     sampleRows = 200,
     pollIntervalMs = 500,
     timeoutMs = 600_000,
+    searchGroup = DEFAULT_SEARCH_GROUP,
     signal,
   } = options;
 
   const clientStart = performance.now();
   const created = firstItem(
     JSON.parse(
-      await call('POST', '/jobs', { query, earliest: earliestSec, latest: latestSec }, signal),
+      await call(searchGroup, 'POST', '/jobs', { query, earliest: earliestSec, latest: latestSec }, signal),
     ),
   );
   const jobId = typeof created.id === 'string' ? created.id : '';
@@ -231,7 +240,7 @@ export async function runTimedQuery(query: string, options: TimedRunOptions): Pr
   const jobPath = `/jobs/${encodeURIComponent(jobId)}`;
   // Cancel server-side on abort so we release the worker-pool slot. Fired
   // without the aborted signal, or the cancellation would abort itself.
-  const cancel = () => void call('DELETE', jobPath).catch(() => undefined);
+  const cancel = () => void call(searchGroup, 'DELETE', jobPath).catch(() => undefined);
   signal?.addEventListener('abort', cancel, { once: true });
 
   try {
@@ -243,13 +252,14 @@ export async function runTimedQuery(query: string, options: TimedRunOptions): Pr
         throw new PerfRunError(`Job ${jobId} exceeded the ${timeoutMs} ms run budget`, jobId);
       }
       await sleep(pollIntervalMs, signal);
-      const polled = firstItem(JSON.parse(await call('GET', jobPath, undefined, signal)));
+      const polled = firstItem(JSON.parse(await call(searchGroup, 'GET', jobPath, undefined, signal)));
       status = typeof polled.status === 'string' ? polled.status : status;
     }
 
     // Fetch results even on a non-completed status: the header still carries
     // the timings, which is what makes a failure diagnosable.
     const raw = await call(
+      searchGroup,
       'GET',
       `${jobPath}/results?offset=0&limit=${Math.max(1, sampleRows)}`,
       undefined,

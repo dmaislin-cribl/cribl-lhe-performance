@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type LabConfig } from '../api/appSettings';
 import { P95_MIN_SAMPLES } from '../api/stats';
 import StatusBanner from '../components/StatusBanner';
+import s from './SettingsPage.module.css';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
@@ -25,19 +26,13 @@ export default function SettingsPage() {
     }
   };
 
-  const field = { width: '100%', padding: 8, margin: '6px 0 6px' } as const;
-  const hint = {
-    color: 'var(--cds-color-fg-muted)',
-    fontSize: 12,
-    display: 'block',
-    marginBottom: 16,
-  } as const;
-
   return (
-    <div style={{ maxWidth: 700 }}>
+    <div className={s.page}>
       <h1>Lab configuration</h1>
-      <p style={{ color: 'var(--cds-color-fg-muted)', margin: '8px 0 20px' }}>
-        Parameters are stored in the app-scoped KV store and reused by the test workbench.
+      <p className={s.intro}>
+        Parameters are stored in the app-scoped KV store and reused by the test workbench. Changing
+        them does not alter runs already recorded — the run log keeps the dataset, search group and
+        query each of its runs was measured under.
       </p>
 
       {saved && <StatusBanner kind="info">Configuration saved</StatusBanner>}
@@ -46,15 +41,29 @@ export default function SettingsPage() {
       <label htmlFor="dataset">Default dataset</label>
       <input
         id="dataset"
+        className={s.field}
         value={config.dataset}
         onChange={(event) => setConfig({ ...config, dataset: event.target.value })}
-        style={field}
       />
-      <span style={hint}>The dataset the windowed search runs against.</span>
+      <span className={s.hint}>The dataset the windowed search runs against.</span>
+
+      <label htmlFor="searchGroup">Search worker group</label>
+      <input
+        id="searchGroup"
+        className={s.field}
+        value={config.searchGroup}
+        onChange={(event) => setConfig({ ...config, searchGroup: event.target.value })}
+      />
+      <span className={s.hint}>
+        The <code>:gid</code> in the search API path — <code>default_search</code> in a stock Cribl
+        Cloud org. Both the search jobs and the Lakehouse engine inventory are read through this
+        group, so a wrong value shows up as an empty engine list.
+      </span>
 
       <label htmlFor="repetitions">Measured repetitions per window</label>
       <input
         id="repetitions"
+        className={s.field}
         type="number"
         min={1}
         max={200}
@@ -65,42 +74,31 @@ export default function SettingsPage() {
             repetitions: Math.min(200, Math.max(1, Number(event.target.value) || 1)),
           })
         }
-        style={field}
       />
-      <span style={hint}>
-        Each window also runs one unmeasured warm-up. A p95 is only reported at{' '}
-        {P95_MIN_SAMPLES}+ repetitions — below that, nearest-rank p95 is arithmetically identical to
-        the maximum, so the summary shows min/median/max instead.
+      <span className={s.hint}>
+        Each window also runs one unmeasured warm-up. A p95 is only reported at {P95_MIN_SAMPLES}+
+        repetitions — below that, nearest-rank p95 is arithmetically identical to the maximum, so the
+        summary shows min/median/max instead.
       </span>
 
       <label htmlFor="cache">Cache state label</label>
       <select
         id="cache"
+        className={s.field}
         value={config.cacheState}
         onChange={(event) => setConfig({ ...config, cacheState: event.target.value })}
-        style={field}
       >
         <option>Unknown</option>
         <option>Warm</option>
         <option>Cold</option>
         <option>Disabled</option>
       </select>
-      <span style={hint}>
+      <span className={s.hint}>
         Recorded as an operator-supplied annotation only. The app cannot observe or control engine
         caching, so this label is not verified — leave it Unknown unless you set the state yourself.
       </span>
 
-      <button
-        onClick={() => void save()}
-        style={{
-          padding: '9px 18px',
-          background: 'var(--cds-color-primary)',
-          color: 'white',
-          border: 0,
-          borderRadius: 4,
-          fontWeight: 600,
-        }}
-      >
+      <button className={s.save} onClick={() => void save()}>
         Save configuration
       </button>
     </div>

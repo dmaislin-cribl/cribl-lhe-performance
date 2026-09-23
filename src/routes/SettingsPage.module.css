@@ -1,0 +1,18 @@
+.page { max-width: 700px; }
+.page h1 { font-size: 24px; line-height: 1.25; }
+.intro { color: var(--cds-color-fg-muted); margin: 8px 0 20px; }
+
+.page label { display: block; font-size: 12px; font-weight: 600; color: var(--cds-color-fg-muted); }
+.field {
+  width: 100%; padding: 8px 10px; margin: 6px 0;
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg); color: var(--cds-color-fg);
+}
+.hint { color: var(--cds-color-fg-muted); font-size: 12px; display: block; margin-bottom: 16px; }
+.hint code { background: var(--cds-color-bg-muted); padding: 1px 4px; border-radius: var(--cds-radius-sm); }
+
+.save {
+  padding: 9px 18px; font-weight: 600; border: 0; border-radius: var(--cds-radius-md);
+  background: var(--cds-color-primary); color: var(--cds-color-primary-fg);
+}
+.save:hover { background: var(--cds-color-primary-hover); }

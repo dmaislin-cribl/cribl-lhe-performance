@@ -1,0 +1,54 @@
+.page { max-width: 1400px; }
+.page h1 { font-size: 24px; line-height: 1.25; }
+.intro { color: var(--cds-color-fg-muted); margin: 8px 0 18px; max-width: 820px; }
+
+.card {
+  background: var(--cds-color-bg); border: 1px solid var(--cds-color-border);
+  border-radius: var(--cds-radius-lg); padding: 18px; margin-bottom: 16px;
+}
+.cardHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.cardHeader h2 { font-size: 16px; margin: 0; }
+.muted { display: block; color: var(--cds-color-fg-muted); font-size: 12px; }
+
+/* Filters: one row, above everything they scope. */
+.filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 16px; }
+.filters label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; color: var(--cds-color-fg-muted); }
+.filters select {
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg); color: var(--cds-color-fg); padding: 8px 10px; min-width: 240px;
+}
+.actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.actions button {
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  padding: 9px 13px; font-weight: 600; background: var(--cds-color-bg); color: var(--cds-color-fg);
+}
+
+.warn {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 11px 14px; margin-bottom: 10px; border-radius: var(--cds-radius-md);
+  background: var(--cds-color-warning-subtle); border: 1px solid var(--cds-color-warning);
+  font-size: 13px;
+}
+/* Status colors ship with an icon + label, never color alone. */
+.warnIcon { flex: none; font-weight: 700; }
+.warnKind { font-weight: 700; margin-right: 6px; }
+
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th {
+  text-align: left; color: var(--cds-color-fg-muted); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em;
+  border-bottom: 1px solid var(--cds-color-border); padding: 9px 8px;
+}
+.table td {
+  border-bottom: 1px solid var(--cds-color-border-subtle); padding: 9px 8px;
+  vertical-align: top; font-variant-numeric: tabular-nums;
+}
+.table tr:last-child td { border-bottom: 0; }
+.num { text-align: right; }
+.baselineCol { background: var(--cds-color-bg-muted); }
+.faster { color: var(--cds-color-success); font-weight: 600; }
+.slower { color: var(--cds-color-danger); font-weight: 600; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+
+.empty { color: var(--cds-color-fg-muted); padding: 28px; text-align: center; }
+.note { color: var(--cds-color-fg-muted); font-size: 12px; margin-top: 12px; }

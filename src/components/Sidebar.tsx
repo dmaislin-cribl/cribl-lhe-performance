@@ -16,6 +16,10 @@ const items: NavItem[] = [
     label: 'Overview', to: '/', end: true,
     icon: <svg {...ICON_PROPS}><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>,
   },
+  {
+    label: 'Compare tiers', to: '/compare',
+    icon: <svg {...ICON_PROPS}><polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></svg>,
+  },
 ];
 
 const settingsItem: NavItem = {

@@ -6,13 +6,17 @@ import { WINDOWS, formatBounds, resolveWindows, type WindowDef } from './api/win
 import { P95_MIN_SAMPLES, countsAgree, formatSec, summarizeSamples } from './api/stats';
 import {
   DEFAULT_CONFIG,
+  EMPTY_RUN_LOG,
+  hashQuery,
   loadConfig,
-  loadRuns,
+  loadRunLog,
   saveConfig,
-  saveRuns,
+  saveRunLog,
   type LabConfig,
+  type RunLog,
   type RunRecord,
 } from './api/appSettings';
+import { BASELINE_TIER, ENGINE_TIERS, labelTier } from './api/tiers';
 import s from './App.module.css';
 
 interface Engine {
@@ -22,21 +26,9 @@ interface Engine {
   effectiveStatus?: string;
 }
 
-const ENGINE_TIERS = ['medium', 'large', 'xlarge', '2xlarge'];
-
-/** Tier the progression must complete before larger tiers unlock. */
-const BASELINE_TIER = 'medium';
-
-const TIER_LABELS: Record<string, string> = {
-  medium: 'Medium',
-  large: 'Large',
-  xlarge: 'X-Large',
-  '2xlarge': '2X-Large',
-};
-
-function labelTier(tier: string): string {
-  return TIER_LABELS[tier] ?? tier;
-}
+/** While an engine is mid-resize its status changes server-side with no event
+ *  to observe, so poll until everything settles — then stop. */
+const ENGINE_POLL_MS = 15_000;
 
 function runId(): string {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
@@ -50,7 +42,7 @@ function buildQuery(config: LabConfig): string {
 
 export default function App() {
   const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
-  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [log, setLog] = useState<RunLog>(EMPTY_RUN_LOG);
   const [engines, setEngines] = useState<Engine[]>([]);
   const [engineId, setEngineId] = useState('');
   const [selectedWindow, setSelectedWindow] = useState('T1');
@@ -59,48 +51,78 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [pendingResize, setPendingResize] = useState<string | null>(null);
+  const [pendingClear, setPendingClear] = useState(false);
   const [previewAnchor, setPreviewAnchor] = useState(0);
+  const [refreshingEngines, setRefreshingEngines] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const configSaveTimer = useRef<number | undefined>(undefined);
 
+  const runs = log.runs;
   const engine = engines.find((item) => item.id === engineId) ?? null;
   const activeTier = engine?.tierSize ?? BASELINE_TIER;
+  const searchGroup = config.searchGroup;
 
   useEffect(() => {
     void loadConfig().then(setConfig);
-    void loadRuns().then(setRuns);
+    void loadRunLog().then(setLog);
   }, []);
 
-  // Engine inventory. Aborts on unmount so a slow response cannot resolve
-  // into an unmounted component.
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch(`${apiUrl().replace(/\/$/, '')}/m/default_search/search/local_search/engines?offset=0&limit=50`, {
-      signal: controller.signal,
-    })
-      .then((response) => {
+  /**
+   * Engine inventory. Also the only way to see a resize land: the control plane
+   * reports `resizing` -> `ready` with nothing to subscribe to, so this is
+   * called on demand and on an interval while anything is unsettled.
+   */
+  const refreshEngines = useCallback(
+    async (signal?: AbortSignal) => {
+      setRefreshingEngines(true);
+      try {
+        const response = await fetch(
+          `${apiUrl().replace(/\/$/, '')}/m/${encodeURIComponent(searchGroup)}/search/local_search/engines?offset=0&limit=50`,
+          { signal },
+        );
         if (!response.ok) throw new Error(`Engine inventory failed (${response.status})`);
-        return response.json() as Promise<{ items?: Engine[] }>;
-      })
-      .then((body) => {
+        const body = (await response.json()) as { items?: Engine[] };
         const items = body.items ?? [];
         setEngines(items);
-        // Prefer a ready engine over whatever happens to be first in the list.
-        const ready = items.find((item) => item.status === 'ready');
-        setEngineId((ready ?? items[0])?.id ?? '');
-        if (!items.length) {
-          setMessage('No Lakehouse engines are visible in this workspace.');
-        }
-      })
-      .catch((cause: unknown) => {
-        if (controller.signal.aborted) return;
+        // Keep the operator's selection across refreshes; only pick on first load.
+        setEngineId((current) => {
+          if (current && items.some((item) => item.id === current)) return current;
+          const ready = items.find((item) => item.status === 'ready');
+          return (ready ?? items[0])?.id ?? '';
+        });
+        if (!items.length) setMessage('No Lakehouse engines are visible in this workspace.');
+      } catch (cause) {
+        if (signal?.aborted) return;
         setMessage(
           `Engine inventory is unavailable (${cause instanceof Error ? cause.message : String(cause)}). Runs are still recorded, but the tier label may be wrong.`,
         );
-      });
+      } finally {
+        setRefreshingEngines(false);
+      }
+    },
+    [searchGroup],
+  );
+
+  // Aborts on unmount so a slow response cannot resolve into an unmounted
+  // component, and refetches if the operator changes the search group.
+  useEffect(() => {
+    const controller = new AbortController();
+    void refreshEngines(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [refreshEngines]);
+
+  // Poll only while something is unsettled — a steady Ready engine needs no traffic.
+  const settling = engines.some((item) => item.status !== 'ready');
+  useEffect(() => {
+    if (!settling || running) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => void refreshEngines(controller.signal), ENGINE_POLL_MS);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
+  }, [settling, running, refreshEngines]);
 
   // Abort any in-flight run if the user navigates away mid-matrix.
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -126,12 +148,29 @@ export default function App() {
     });
   }, []);
 
-  const appendRun = useCallback((record: RunRecord) => {
-    setRuns((current) => {
-      const next = [record, ...current];
-      void saveRuns(next);
+  /**
+   * Append a run and, the first time a query revision is seen, store its full
+   * text under the hash the run references. Without that the run log would hold
+   * timings produced by a query that is no longer on screen.
+   */
+  const appendRun = useCallback((record: RunRecord, queryText: string) => {
+    setLog((current) => {
+      const next: RunLog = {
+        runs: [record, ...current.runs],
+        queries: current.queries[record.queryHash]
+          ? current.queries
+          : { ...current.queries, [record.queryHash]: queryText },
+      };
+      void saveRunLog(next);
       return next;
     });
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    setPendingClear(false);
+    setLog(EMPTY_RUN_LOG);
+    void saveRunLog(EMPTY_RUN_LOG);
+    setMessage('Run history cleared. Configuration is unchanged.');
   }, []);
 
   /** One search. Records the outcome either way — a failure is data too. */
@@ -143,6 +182,7 @@ export default function App() {
       signal: AbortSignal,
     ) => {
       const started = performance.now();
+      const query = buildQuery(config);
       const base: Omit<RunRecord, 'engineMs' | 'queueMs' | 'totalEventCount' | 'status' | 'notes' | 'jobId'> = {
         id: runId(),
         engine: tier,
@@ -152,35 +192,45 @@ export default function App() {
         clientMs: null,
         measured,
         at: new Date().toISOString(),
+        dataset: config.dataset,
+        queryHash: hashQuery(query),
+        searchGroup: config.searchGroup,
       };
       try {
-        const result = await runTimedQuery(buildQuery(config), {
+        const result = await runTimedQuery(query, {
           earliestSec: window.earliestSec,
           latestSec: window.latestSec,
+          searchGroup: config.searchGroup,
           signal,
         });
-        appendRun({
-          ...base,
-          jobId: result.jobId,
-          engineMs: result.engineMs,
-          queueMs: result.queueMs,
-          clientMs: Math.round(result.clientMs),
-          totalEventCount: result.totalEventCount,
-          status: 'Success',
-          notes: measured ? '' : 'Warm-up',
-        });
+        appendRun(
+          {
+            ...base,
+            jobId: result.jobId,
+            engineMs: result.engineMs,
+            queueMs: result.queueMs,
+            clientMs: Math.round(result.clientMs),
+            totalEventCount: result.totalEventCount,
+            status: 'Success',
+            notes: measured ? '' : 'Warm-up',
+          },
+          query,
+        );
       } catch (cause) {
         if (signal.aborted) throw cause;
-        appendRun({
-          ...base,
-          jobId: cause instanceof PerfRunError ? (cause.jobId ?? '') : '',
-          engineMs: null,
-          queueMs: null,
-          clientMs: Math.round(performance.now() - started),
-          totalEventCount: null,
-          status: 'Error',
-          notes: cause instanceof Error ? cause.message : String(cause),
-        });
+        appendRun(
+          {
+            ...base,
+            jobId: cause instanceof PerfRunError ? (cause.jobId ?? '') : '',
+            engineMs: null,
+            queueMs: null,
+            clientMs: Math.round(performance.now() - started),
+            totalEventCount: null,
+            status: 'Error',
+            notes: cause instanceof Error ? cause.message : String(cause),
+          },
+          query,
+        );
       }
     },
     [appendRun, config],
@@ -241,7 +291,7 @@ export default function App() {
       if (!engine) return;
       try {
         const response = await fetch(
-          `${apiUrl().replace(/\/$/, '')}/m/default_search/search/local_search/engines/${encodeURIComponent(engine.id)}`,
+          `${apiUrl().replace(/\/$/, '')}/m/${encodeURIComponent(searchGroup)}/search/local_search/engines/${encodeURIComponent(engine.id)}`,
           {
             method: 'PATCH',
             headers: { 'content-type': 'application/json' },
@@ -255,12 +305,14 @@ export default function App() {
           ),
         );
         setError('');
-        setMessage(`Resize to ${labelTier(tierSize)} requested. Wait for Ready before running its matrix.`);
+        setMessage(
+          `Resize to ${labelTier(tierSize)} requested. Engine status refreshes automatically until it reports Ready — do not start its matrix before then.`,
+        );
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     },
-    [engine],
+    [engine, searchGroup],
   );
 
   const measured = useMemo(
@@ -342,6 +394,14 @@ export default function App() {
         <div className={s.engineBadge}>
           <span className={`${s.dot} ${engine?.status === 'ready' ? s.ready : ''}`} />
           {engine ? `${labelTier(engine.tierSize)} · ${engine.status}` : 'No engine selected'}
+          <button
+            className={s.refresh}
+            onClick={() => void refreshEngines()}
+            disabled={refreshingEngines}
+            title="Re-read engine status from the control plane"
+          >
+            {refreshingEngines ? 'Checking…' : 'Refresh'}
+          </button>
         </div>
       </header>
 
@@ -393,7 +453,10 @@ export default function App() {
             Stop
           </button>
         )}
-        <Link className={s.linkButton} to="/settings">
+        <Link className={s.linkButton} to="/compare">
+          Compare tiers
+        </Link>
+        <Link className={s.linkButtonPlain} to="/settings">
           Configure
         </Link>
       </section>
@@ -571,7 +634,12 @@ export default function App() {
               to the engine
             </span>
           </div>
-          <Link to="/settings">Manage parameters</Link>
+          <div className={s.headerActions}>
+            <Link to="/compare">Compare tiers</Link>
+            <button onClick={() => setPendingClear(true)} disabled={running || !runs.length}>
+              Clear history
+            </button>
+          </div>
         </div>
         <table>
           <thead>
@@ -646,6 +714,30 @@ export default function App() {
               <button onClick={() => setPendingResize(null)}>Cancel</button>
               <button className={s.primary} onClick={() => void applyResize(pendingResize)}>
                 Resize to {labelTier(pendingResize)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingClear && (
+        <div className={s.modalScrim} role="presentation" onClick={() => setPendingClear(false)}>
+          <div
+            className={s.modal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clear-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="clear-title">Clear run history?</h2>
+            <p>
+              This deletes all {runs.length} recorded runs, including every tier already measured, and
+              cannot be undone. Export from <b>Compare tiers</b> first if the results still matter.
+            </p>
+            <div className={s.modalActions}>
+              <button onClick={() => setPendingClear(false)}>Cancel</button>
+              <button className={s.stop} onClick={clearHistory}>
+                Delete {runs.length} runs
               </button>
             </div>
           </div>

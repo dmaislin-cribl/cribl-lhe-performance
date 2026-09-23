@@ -1,0 +1,53 @@
+.wrap { position: relative; }
+
+.svg { display: block; width: 100%; height: auto; outline: none; }
+.svg:focus-visible { box-shadow: 0 0 0 2px var(--cds-color-accent); border-radius: var(--cds-radius-md); }
+
+/* Recessive chrome: hairline, solid, one step off the surface. */
+.grid { stroke: var(--chart-grid); stroke-width: 1; }
+.axis { stroke: var(--chart-grid); stroke-width: 1; }
+.crosshair { stroke: var(--chart-crosshair); stroke-width: 1; }
+
+/* Axis and label text wears text tokens, never the series color. */
+.tick { fill: var(--cds-color-fg-muted); font-size: 11px; }
+.tickY { text-anchor: end; font-variant-numeric: tabular-nums; }
+.tickX { text-anchor: middle; }
+.tickXSub { fill: var(--cds-color-fg-subtle); font-size: 10px; text-anchor: middle; }
+.axisTitle { fill: var(--cds-color-fg-muted); font-size: 11px; }
+.endLabel { fill: var(--cds-color-fg); font-size: 11px; font-weight: 600; }
+
+.line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+/* The 2px surface ring keeps a marker legible where it crosses another line,
+   and it is part of the hit target. */
+.marker { stroke: var(--chart-surface); stroke-width: 2; }
+.markerActive { stroke: var(--cds-color-fg); stroke-width: 2; }
+
+.legend {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  margin: 2px 0 10px; font-size: 12px; color: var(--cds-color-fg-muted);
+}
+.legendItem { display: flex; align-items: center; gap: 7px; }
+.legendKey { width: 16px; height: 2px; border-radius: 1px; flex: none; }
+
+.tooltip {
+  position: absolute; pointer-events: none; z-index: 5;
+  min-width: 150px; padding: 9px 11px;
+  background: var(--cds-color-bg); color: var(--cds-color-fg);
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  box-shadow: var(--cds-shadow-md); font-size: 12px;
+}
+.tooltipHead { font-weight: 700; margin-bottom: 6px; }
+.tooltipSub { color: var(--cds-color-fg-muted); font-weight: 400; }
+.tooltipRow { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+/* Values lead, series names follow — the legend's hierarchy, inverted. */
+.tooltipValue {
+  margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums;
+  font-family: var(--cds-font-mono);
+}
+.tooltipName { color: var(--cds-color-fg-muted); }
+
+.empty {
+  display: flex; align-items: center; justify-content: center;
+  height: 240px; color: var(--cds-color-fg-muted); font-size: 13px;
+  border: 1px dashed var(--cds-color-border); border-radius: var(--cds-radius-md);
+}

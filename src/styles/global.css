@@ -79,6 +79,66 @@
   /* Transitions */
   --cds-transition-fast: 120ms ease;
   --cds-transition-normal: 200ms ease;
+
+  /* ---- Chart series ramp ----
+     Engine tiers are an ORDERED progression (Medium -> 2X-Large), not four
+     unrelated categories, so the series colors are a single-hue ordinal ramp
+     that reads light -> dark with tier size. A categorical four-hue theme was
+     tried first and failed validation: #eda100 vs #eb6834 sat at normal-vision
+     dE 13.7, below the 15 floor.
+     Validated with the dataviz validator: `--ordinal`, mode light, surface
+     #ffffff — monotone lightness, dL gaps >= 0.06, light end 2.11:1, hue spread 4deg. */
+  --chart-1: #86b6ef;
+  --chart-2: #3987e5;
+  --chart-3: #1c5cab;
+  --chart-4: #0d366b;
+  /* Chart chrome: one step off the surface, recessive. */
+  --chart-grid: #e8eaed;
+  --chart-crosshair: #b9bcc2;
+  --chart-surface: var(--cds-color-bg);
+}
+
+/* ---- Dark mode ----
+   Selected, not derived: the dark chart steps are their own steps from the same
+   blue ramp, validated against the dark card surface (#1a1a19) rather than
+   being a mechanical inversion of the light ones. The ramp direction flips so
+   that the largest tier stays the most prominent series against its surface. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --cds-color-bg: #1a1a19;
+    --cds-color-bg-subtle: #121211;
+    --cds-color-bg-muted: #2a2a28;
+    --cds-color-bg-inverse: #ededec;
+    --cds-color-fg: #ededec;
+    --cds-color-fg-muted: #a1a1a0;
+    --cds-color-fg-subtle: #7c7c7b;
+    --cds-color-fg-inverse: #1a1a19;
+    --cds-color-border: #3a3a38;
+    --cds-color-border-subtle: #2a2a28;
+
+    --cds-color-accent: #4da3ff;
+    --cds-color-accent-hover: #7dbcff;
+    --cds-color-accent-subtle: #13273c;
+
+    --cds-color-success: #45c98a;
+    --cds-color-success-subtle: #102a1e;
+    --cds-color-danger: #ff6369;
+    --cds-color-danger-subtle: #2e1416;
+    --cds-color-warning: #ffca63;
+    --cds-color-warning-subtle: #2d2210;
+
+    --cds-color-primary: #2f9e44;
+    --cds-color-primary-hover: #37b24d;
+
+    /* Validated: `--ordinal`, mode dark, surface #1a1a19 — light end 2.15:1,
+       hue spread 4deg, monotone lightness. */
+    --chart-1: #184f95;
+    --chart-2: #3987e5;
+    --chart-3: #86b6ef;
+    --chart-4: #cde2fb;
+    --chart-grid: #2f2f2d;
+    --chart-crosshair: #55554f;
+  }
 }
 
 /* ---- Base reset ---- */

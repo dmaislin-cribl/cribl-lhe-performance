@@ -23,6 +23,11 @@ export interface LabConfig {
   query: string;
   repetitions: number;
   cacheState: string;
+  /**
+   * Search worker group. policies.yml is written for any `:gid`, so this is
+   * not required to be `default_search` — it was only hardcoded.
+   */
+  searchGroup: string;
 }
 
 export interface RunRecord {
@@ -48,6 +53,21 @@ export interface RunRecord {
   /** False for warm-up runs, which are excluded from every statistic. */
   measured: boolean;
   at: string;
+  /**
+   * Provenance. Without these, editing the query silently makes every earlier
+   * timing unattributable — the run log would show numbers produced by a query
+   * that is no longer on screen. The hash keys into `RunLog.queries`, so the
+   * full text is stored once rather than per run.
+   */
+  dataset: string;
+  queryHash: string;
+  searchGroup: string;
+}
+
+export interface RunLog {
+  runs: RunRecord[];
+  /** queryHash -> full search logic, for runs recorded under an older query. */
+  queries: Record<string, string>;
 }
 
 export const DEFAULT_QUERY =
@@ -62,7 +82,23 @@ export const DEFAULT_CONFIG: LabConfig = {
   query: DEFAULT_QUERY,
   repetitions: 20,
   cacheState: 'Unknown',
+  searchGroup: 'default_search',
 };
+
+export const EMPTY_RUN_LOG: RunLog = { runs: [], queries: {} };
+
+/**
+ * Short stable digest of the search logic (djb2, base36). Only needs to
+ * distinguish one query revision from another within this app, so a
+ * non-cryptographic hash keeps it synchronous and dependency-free.
+ */
+export function hashQuery(query: string): string {
+  let hash = 5381;
+  for (let index = 0; index < query.length; index += 1) {
+    hash = ((hash << 5) + hash + query.charCodeAt(index)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.length ? value : fallback;
@@ -78,7 +114,22 @@ export function normalizeConfig(stored: Partial<LabConfig> | null): LabConfig {
         ? Math.min(200, Math.floor(stored.repetitions))
         : DEFAULT_CONFIG.repetitions,
     cacheState: asString(stored?.cacheState, DEFAULT_CONFIG.cacheState),
+    searchGroup: asString(stored?.searchGroup, DEFAULT_CONFIG.searchGroup),
   };
+}
+
+/**
+ * Cap the history and drop query texts nothing references any more, so the
+ * lookup table cannot outlive the runs that needed it.
+ */
+export function pruneRunLog(log: RunLog, max = MAX_RUNS): RunLog {
+  const runs = log.runs.slice(0, max);
+  const live = new Set(runs.map((run) => run.queryHash));
+  const queries: Record<string, string> = {};
+  for (const [hash, text] of Object.entries(log.queries)) {
+    if (live.has(hash)) queries[hash] = text;
+  }
+  return { runs, queries };
 }
 
 export async function loadConfig(): Promise<LabConfig> {
@@ -89,11 +140,15 @@ export async function saveConfig(config: LabConfig): Promise<void> {
   await kvPut(CONFIG_KEY, config);
 }
 
-export async function loadRuns(): Promise<RunRecord[]> {
-  const stored = await kvGet<{ runs?: RunRecord[] }>(RUNS_KEY);
-  return Array.isArray(stored?.runs) ? stored.runs : [];
+export async function loadRunLog(): Promise<RunLog> {
+  const stored = await kvGet<Partial<RunLog>>(RUNS_KEY);
+  return {
+    runs: Array.isArray(stored?.runs) ? stored.runs : [],
+    queries:
+      stored?.queries && typeof stored.queries === 'object' ? (stored.queries as Record<string, string>) : {},
+  };
 }
 
-export async function saveRuns(runs: RunRecord[]): Promise<void> {
-  await kvPut(RUNS_KEY, { runs: runs.slice(0, MAX_RUNS) });
+export async function saveRunLog(log: RunLog): Promise<void> {
+  await kvPut(RUNS_KEY, pruneRunLog(log));
 }

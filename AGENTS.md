@@ -1,16 +1,23 @@
 # Lakehouse Performance Lab
 
 ## Overview
-This app runs the approved seven-term hostname KQL against the Fortinet_Syslog dataset across eight editable time windows. It begins with the current Lakehouse Engine, records a warm-up plus configurable measured repetitions in the app-scoped KV store, and provides review tables for runtimes, errors, and result counts.
+This app runs the approved seven-term hostname KQL against the Fortinet_Syslog dataset across eight time windows (T1 1h … T8 14d). It records a warm-up plus configurable measured repetitions per window in the app-scoped KV store, and reports the **engine's own execution time** per tier, with a cross-tier comparison view and clipboard export.
+
+## The measurement (do not regress this)
+The headline metric is `timeCompleted - timeStarted` from the **metadata header line of `GET /search/jobs/{id}/results`** — the engine's execution time as measured server-side. Queue time (`timeStarted - timeCreated`) and browser wall clock are recorded separately and never charged to the engine. Three rules hold this together:
+
+- `src/api/perfRun.ts` owns job submission and timing. Do **not** switch it back to `runQuery`: that helper polls on a fixed 400 ms interval, caps runs at a non-overridable 48 s, and discards line 0 of the results payload — the only line carrying the timings and the true event count.
+- `src/api/windows.ts` resolves every window **once per session** against a single anchor, to absolute epoch seconds. Relative bounds re-evaluated per search would average repetitions taken over different data.
+- `src/api/stats.ts` withholds p95 below `P95_MIN_SAMPLES` (20). Nearest-rank p95 over a handful of samples is arithmetically the maximum, so reporting it would overstate what was measured.
 
 ## Architecture
-The workbench lives in `src/App.tsx` and uses `runQuery` from `@criblio/app-utils/search`. Engine inventory and resize controls use the scoped Search API; resize is only offered after the Medium matrix reaches the configured repetition target and always requires a browser confirmation. Settings are stored through `@criblio/app-utils/settings`. No backend or external proxy is required.
+`src/App.tsx` is the workbench; `src/routes/ComparePage.tsx` is the cross-tier comparison (`src/api/compare.ts` derives it, `src/api/exportResults.ts` serialises it); `src/routes/SettingsPage.tsx` holds config. `src/api/kv.ts` is a two-key KV accessor — the framework's `loadSettings`/`saveSettings` hardcode a single key, and config and run history have very different write rates. Config and the run log are therefore separate KV records. Engine inventory and resize use the Search API scoped to the configured worker group. No backend endpoint or external proxy is required, so there is no `config/backend.yml` and no `backend/` directory.
 
 ## Design system
-The established scaffold tokens in `src/styles/global.css` and the navy sidebar are preserved. The lab uses compact Cribl-style cards, tables, blue/green actions, semantic status colors, and responsive two-column layout. Keep both light and dark shell themes in mind when changing UI.
+The scaffold tokens in `src/styles/global.css` and the navy sidebar are preserved. Dark mode is defined there too, with its **own** chart steps validated against the dark surface rather than an inversion of the light ones. Chart series colors are an **ordinal** single-hue ramp (`--chart-1` … `--chart-4`), because engine tiers are an ordered progression; they are assigned per tier in `src/api/tiers.ts` so filtering tiers never repaints the rest. A four-hue categorical palette was tried and failed colorblind validation. Never add a second y-axis: switch the metric instead.
 
 ## Platform rules
-Search endpoints use the `default_search` group. Never invent engine timing/cache metadata: unavailable values remain Unknown or are recorded in Notes. KV persistence must use the framework settings helper, not browser storage. Control-plane resize is a live PATCH and must remain an explicit user action with confirmation. Run `build_app` after meaningful changes and lint before shipping.
+The search worker group is configurable (`default_search` by default) and is threaded through both search jobs and the engine inventory. Never invent engine timing or cache metadata: the cache-state field is an unverified operator annotation and stays Unknown unless the operator set the state themselves. KV persistence must use the platform KV store, not browser storage. Control-plane resize is a live PATCH and must remain an explicit user action, confirmed through the **in-app** dialog — not `window.confirm`, which the sandboxed iframe can suppress outright, returning `false` and making the button look broken. Every new module needs unit tests; run `npm run verify` (lint + tests + `tsc -b`) and `npm run build` before shipping.
 
 # Shared framework libraries
 
