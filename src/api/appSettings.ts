@@ -19,8 +19,12 @@ const RUNS_KEY = 'runs';
 export const MAX_RUNS = 2000;
 
 export interface LabConfig {
+  /**
+   * Dataset offered when creating a new saved search. The dataset a run
+   * actually used belongs to the saved search (see searches.ts) and is recorded
+   * on the run — this is only the default for the next one.
+   */
   dataset: string;
-  query: string;
   repetitions: number;
   cacheState: string;
   /**
@@ -40,6 +44,8 @@ export interface RunRecord {
   /** Absolute bounds actually searched, epoch seconds. */
   earliestSec: number;
   latestSec: number;
+  /** Start to finish, server-side: queue wait plus execution, ms. The headline. */
+  totalMs: number | null;
   /** Authoritative server-side engine execution time, ms. */
   engineMs: number | null;
   /** Queue wait before execution, ms. */
@@ -62,6 +68,14 @@ export interface RunRecord {
   dataset: string;
   queryHash: string;
   searchGroup: string;
+  /**
+   * Which saved search produced this run, and its name at the time. The id can
+   * be deleted from the library and the name can be edited, so neither is
+   * authoritative — `queryHash` is. They exist so a run log still reads as
+   * "which test case was this" rather than a bare hash.
+   */
+  searchId: string;
+  searchName: string;
 }
 
 export interface RunLog {
@@ -70,16 +84,8 @@ export interface RunLog {
   queries: Record<string, string>;
 }
 
-export const DEFAULT_QUERY =
-  'where hostname has "baidu" or hostname has "qq" or hostname has "aliyuncs"\n' +
-  '   or hostname has "yixinfa" or hostname has "pingxiaobao"\n' +
-  '   or hostname has "tougeping" or hostname has "eselltech"\n' +
-  '| summarize events = count() by hostname\n' +
-  '| sort by events desc';
-
 export const DEFAULT_CONFIG: LabConfig = {
   dataset: 'Fortinet_Syslog',
-  query: DEFAULT_QUERY,
   repetitions: 20,
   cacheState: 'Unknown',
   searchGroup: 'default_search',
@@ -108,7 +114,6 @@ function asString(value: unknown, fallback: string): string {
 export function normalizeConfig(stored: Partial<LabConfig> | null): LabConfig {
   return {
     dataset: asString(stored?.dataset, DEFAULT_CONFIG.dataset),
-    query: asString(stored?.query, DEFAULT_CONFIG.query),
     repetitions:
       typeof stored?.repetitions === 'number' && stored.repetitions > 0
         ? Math.min(200, Math.floor(stored.repetitions))
@@ -136,8 +141,15 @@ export async function loadConfig(): Promise<LabConfig> {
   return normalizeConfig(await kvGet<Partial<LabConfig>>(CONFIG_KEY));
 }
 
+/**
+ * Written as a merge over whatever is stored, not a replacement. `query` used to
+ * live in this record and is still the seed for the search library on a
+ * pre-library install (see searches.ts) — a plain overwrite from a Settings save
+ * would destroy it before the library was ever built.
+ */
 export async function saveConfig(config: LabConfig): Promise<void> {
-  await kvPut(CONFIG_KEY, config);
+  const stored = (await kvGet<Record<string, unknown>>(CONFIG_KEY)) ?? {};
+  await kvPut(CONFIG_KEY, { ...stored, ...config });
 }
 
 export async function loadRunLog(): Promise<RunLog> {

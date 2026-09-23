@@ -31,7 +31,18 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
     dataset: 'Fortinet_Syslog',
     queryHash: 'abc',
     searchGroup: 'default_search',
+    searchId: 's-1',
+    searchName: 'Test search',
     ...overrides,
+    // The comparison defaults to total time, so fixtures mirror engineMs into
+    // totalMs: an assertion written against engineMs stays readable, and the
+    // queue-inclusive path gets its own test rather than skewing every number.
+    totalMs:
+      overrides.totalMs !== undefined
+        ? overrides.totalMs
+        : 'engineMs' in overrides
+          ? overrides.engineMs!
+          : 1000,
   };
 }
 

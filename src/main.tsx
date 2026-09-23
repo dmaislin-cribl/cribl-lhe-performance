@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import App from './App';
 import AppShell from './components/AppShell';
 import ComparePage from './routes/ComparePage';
+import SearchesPage from './routes/SearchesPage';
 import SettingsPage from './routes/SettingsPage';
 import './styles/global.css';
 
@@ -13,6 +14,7 @@ createRoot(document.getElementById('root')!).render(
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<App />} />
+          <Route path="searches" element={<SearchesPage />} />
           <Route path="compare" element={<ComparePage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

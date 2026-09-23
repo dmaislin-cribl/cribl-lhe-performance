@@ -17,6 +17,10 @@ const items: NavItem[] = [
     icon: <svg {...ICON_PROPS}><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>,
   },
   {
+    label: 'Test searches', to: '/searches',
+    icon: <svg {...ICON_PROPS}><circle cx="11" cy="11" r="7" /><line x1="16.5" y1="16.5" x2="21" y2="21" /></svg>,
+  },
+  {
     label: 'Compare tiers', to: '/compare',
     icon: <svg {...ICON_PROPS}><polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></svg>,
   },

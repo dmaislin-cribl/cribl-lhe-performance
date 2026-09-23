@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type LabConfig } from '../api/appSettings';
 import { P95_MIN_SAMPLES } from '../api/stats';
 import StatusBanner from '../components/StatusBanner';
@@ -32,7 +33,8 @@ export default function SettingsPage() {
       <p className={s.intro}>
         Parameters are stored in the app-scoped KV store and reused by the test workbench. Changing
         them does not alter runs already recorded — the run log keeps the dataset, search group and
-        query each of its runs was measured under.
+        query each of its runs was measured under. The searches themselves live in{' '}
+        <Link to="/searches">Test searches</Link>, not here.
       </p>
 
       {saved && <StatusBanner kind="info">Configuration saved</StatusBanner>}
@@ -45,7 +47,10 @@ export default function SettingsPage() {
         value={config.dataset}
         onChange={(event) => setConfig({ ...config, dataset: event.target.value })}
       />
-      <span className={s.hint}>The dataset the windowed search runs against.</span>
+      <span className={s.hint}>
+        Used for the <code>dataset=</code> term of a newly created test search. Each saved search
+        carries its own, so editing this does not change any existing one.
+      </span>
 
       <label htmlFor="searchGroup">Search worker group</label>
       <input

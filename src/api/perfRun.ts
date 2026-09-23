@@ -59,6 +59,14 @@ export interface TimedRun {
   jobId: string;
   /** Terminal job status as reported by the server. */
   status: string;
+  /**
+   * Start to finish as the server saw it: `timeCompleted - timeCreated`, so
+   * queue wait plus execution. This is the number to quote when the question is
+   * "how long did the search take" — it is taken from the server's own clock,
+   * not added up from the two parts, so it stays right even if the server
+   * reports a gap the other two fields do not explain.
+   */
+  totalMs: number | null;
   /** Authoritative engine execution time, ms. Null if the server omitted it. */
   engineMs: number | null;
   /** Time spent queued before execution began, ms. */
@@ -276,6 +284,7 @@ export async function runTimedQuery(query: string, options: TimedRunOptions): Pr
     return {
       jobId,
       status,
+      totalMs: span(job.timeCreated, job.timeCompleted),
       engineMs: span(job.timeStarted, job.timeCompleted),
       queueMs: span(job.timeCreated, job.timeStarted),
       clientMs,

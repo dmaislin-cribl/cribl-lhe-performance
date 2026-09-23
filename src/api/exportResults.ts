@@ -44,6 +44,7 @@ const RUN_HEADER = [
   'window',
   'earliest_utc',
   'latest_utc',
+  'total_sec',
   'engine_sec',
   'queue_sec',
   'client_sec',
@@ -53,6 +54,7 @@ const RUN_HEADER = [
   'dataset',
   'search_group',
   'query_hash',
+  'search_name',
   'notes',
 ];
 
@@ -69,6 +71,7 @@ function runRow(run: RunRecord): unknown[] {
     run.window,
     isoAt(run.earliestSec),
     isoAt(run.latestSec),
+    run.totalMs === null ? '' : (run.totalMs / 1000).toFixed(3),
     run.engineMs === null ? '' : (run.engineMs / 1000).toFixed(3),
     run.queueMs === null ? '' : (run.queueMs / 1000).toFixed(3),
     run.clientMs === null ? '' : (run.clientMs / 1000).toFixed(3),
@@ -78,6 +81,7 @@ function runRow(run: RunRecord): unknown[] {
     run.dataset,
     run.searchGroup,
     run.queryHash,
+    run.searchName,
     run.notes,
   ];
 }
@@ -162,7 +166,7 @@ export function provenanceBlock(log: RunLog, extra: Record<string, string> = {})
     `# ${__APP_DISPLAY_NAME__} ${__APP_ID__} v${__APP_VERSION__}`,
     `# exported: ${new Date().toISOString()}`,
     `# measured runs: ${measured.length}`,
-    `# metric: engine execution time (server timeCompleted - timeStarted)`,
+    `# timings are server-side: total = timeCompleted - timeCreated (queue + execution), engine = timeCompleted - timeStarted`,
     ...Object.entries(extra).map(([key, value]) => `# ${key}: ${value}`),
   ];
   for (const [hash, query] of Object.entries(log.queries)) {

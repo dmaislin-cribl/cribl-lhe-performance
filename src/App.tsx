@@ -16,6 +16,13 @@ import {
   type RunLog,
   type RunRecord,
 } from './api/appSettings';
+import {
+  deriveDataset,
+  loadLibrary,
+  selectedSearches,
+  type SavedSearch,
+  type SearchLibrary,
+} from './api/searches';
 import { BASELINE_TIER, ENGINE_TIERS, labelTier } from './api/tiers';
 import s from './App.module.css';
 
@@ -35,13 +42,14 @@ function runId(): string {
   return `${stamp}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-/** Full KQL for a window: only the bounds differ between windows. */
-function buildQuery(config: LabConfig): string {
-  return `dataset="${config.dataset}"\n| ${config.query}`;
+/** Middle value of a sample set, or null. Used for the plain-language figures. */
+function medianOf(values: (number | null)[]): number | null {
+  return summarizeSamples(values.filter((value): value is number => typeof value === 'number')).median;
 }
 
 export default function App() {
   const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
+  const [library, setLibrary] = useState<SearchLibrary | null>(null);
   const [log, setLog] = useState<RunLog>(EMPTY_RUN_LOG);
   const [engines, setEngines] = useState<Engine[]>([]);
   const [engineId, setEngineId] = useState('');
@@ -54,6 +62,12 @@ export default function App() {
   const [pendingClear, setPendingClear] = useState(false);
   const [previewAnchor, setPreviewAnchor] = useState(0);
   const [refreshingEngines, setRefreshingEngines] = useState(false);
+  /**
+   * The results table answers "how long did each search take" by default. The
+   * distribution columns (p95, CV, spread) are real but they are not what most
+   * operators came for, and a table that leads with them reads as noise.
+   */
+  const [advanced, setAdvanced] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const configSaveTimer = useRef<number | undefined>(undefined);
@@ -62,10 +76,12 @@ export default function App() {
   const engine = engines.find((item) => item.id === engineId) ?? null;
   const activeTier = engine?.tierSize ?? BASELINE_TIER;
   const searchGroup = config.searchGroup;
+  const chosen = useMemo(() => (library ? selectedSearches(library) : []), [library]);
 
   useEffect(() => {
     void loadConfig().then(setConfig);
     void loadRunLog().then(setLog);
+    void loadLibrary().then(setLibrary);
   }, []);
 
   /**
@@ -170,20 +186,24 @@ export default function App() {
     setPendingClear(false);
     setLog(EMPTY_RUN_LOG);
     void saveRunLog(EMPTY_RUN_LOG);
-    setMessage('Run history cleared. Configuration is unchanged.');
+    setMessage('Run history cleared. Saved searches and configuration are unchanged.');
   }, []);
 
   /** One search. Records the outcome either way — a failure is data too. */
   const runOnce = useCallback(
     async (
+      search: SavedSearch,
       window: ReturnType<typeof resolveWindows>[number],
       measured: boolean,
       tier: string,
       signal: AbortSignal,
     ) => {
       const started = performance.now();
-      const query = buildQuery(config);
-      const base: Omit<RunRecord, 'engineMs' | 'queueMs' | 'totalEventCount' | 'status' | 'notes' | 'jobId'> = {
+      const query = search.text.trim();
+      const base: Omit<
+        RunRecord,
+        'totalMs' | 'engineMs' | 'queueMs' | 'totalEventCount' | 'status' | 'notes' | 'jobId'
+      > = {
         id: runId(),
         engine: tier,
         window: window.id,
@@ -192,9 +212,11 @@ export default function App() {
         clientMs: null,
         measured,
         at: new Date().toISOString(),
-        dataset: config.dataset,
+        dataset: deriveDataset(query),
         queryHash: hashQuery(query),
         searchGroup: config.searchGroup,
+        searchId: search.id,
+        searchName: search.name,
       };
       try {
         const result = await runTimedQuery(query, {
@@ -207,6 +229,7 @@ export default function App() {
           {
             ...base,
             jobId: result.jobId,
+            totalMs: result.totalMs,
             engineMs: result.engineMs,
             queueMs: result.queueMs,
             clientMs: Math.round(result.clientMs),
@@ -222,6 +245,7 @@ export default function App() {
           {
             ...base,
             jobId: cause instanceof PerfRunError ? (cause.jobId ?? '') : '',
+            totalMs: null,
             engineMs: null,
             queueMs: null,
             clientMs: Math.round(performance.now() - started),
@@ -233,16 +257,18 @@ export default function App() {
         );
       }
     },
-    [appendRun, config],
+    [appendRun, config.searchGroup],
   );
 
   /**
-   * Run a set of windows. Bounds are resolved ONCE against a single anchor so
-   * that every repetition — and every window — searches identical data even if
-   * the session straddles an hour or day boundary.
+   * Run a set of windows for every selected search. Bounds are resolved ONCE
+   * against a single anchor so that every repetition — and every window, and
+   * every search — measures identical data even if the session straddles an hour
+   * or day boundary.
    */
   const runSession = useCallback(
     async (defs: WindowDef[]) => {
+      if (!chosen.length) return;
       const controller = new AbortController();
       abortRef.current = controller;
       setRunning(true);
@@ -250,27 +276,31 @@ export default function App() {
       setMessage('');
       const tier = activeTier;
       const resolved = resolveWindows(defs, Date.now());
+      const perSearch = resolved.length * (config.repetitions + 1);
       try {
-        for (const [index, window] of resolved.entries()) {
-          setProgress(
-            `${window.id} (${index + 1}/${resolved.length}) on ${labelTier(tier)} · warm-up + ${config.repetitions} measured`,
-          );
-          await runOnce(window, false, tier, controller.signal);
-          for (let repetition = 0; repetition < config.repetitions; repetition += 1) {
+        let done = 0;
+        for (const search of chosen) {
+          for (const window of resolved) {
             setProgress(
-              `${window.id} (${index + 1}/${resolved.length}) on ${labelTier(tier)} · repetition ${repetition + 1}/${config.repetitions}`,
+              `${search.name} · ${window.id} on ${labelTier(tier)} · warm-up (${done}/${perSearch * chosen.length} searches run)`,
             );
-            await runOnce(window, true, tier, controller.signal);
+            await runOnce(search, window, false, tier, controller.signal);
+            done += 1;
+            for (let repetition = 0; repetition < config.repetitions; repetition += 1) {
+              setProgress(
+                `${search.name} · ${window.id} on ${labelTier(tier)} · run ${repetition + 1} of ${config.repetitions} (${done}/${perSearch * chosen.length} total)`,
+              );
+              await runOnce(search, window, true, tier, controller.signal);
+              done += 1;
+            }
           }
         }
         setMessage(
-          resolved.length === 1
-            ? `${resolved[0].id} complete on ${labelTier(tier)}.`
-            : `${labelTier(tier)} matrix complete across ${resolved.length} windows.`,
+          `Done: ${chosen.length} ${chosen.length === 1 ? 'search' : 'searches'} × ${resolved.length} ${resolved.length === 1 ? 'window' : 'windows'} on ${labelTier(tier)}.`,
         );
       } catch (cause) {
         if (controller.signal.aborted) {
-          setMessage('Run stopped. Completed repetitions are kept; partial sample sets are flagged.');
+          setMessage('Run stopped. Completed runs are kept; incomplete sets are flagged.');
         } else {
           setError(cause instanceof Error ? cause.message : String(cause));
         }
@@ -280,7 +310,7 @@ export default function App() {
         abortRef.current = null;
       }
     },
-    [activeTier, config.repetitions, runOnce],
+    [activeTier, chosen, config.repetitions, runOnce],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
@@ -320,35 +350,44 @@ export default function App() {
     [runs, activeTier],
   );
 
+  /**
+   * One row per selected search per window, on the active tier. Leads with the
+   * end-to-end time the server reported, split into queue and engine so a slow
+   * result can be attributed without needing the distribution columns.
+   */
   const summary = useMemo(() => {
-    return WINDOWS.map((def) => {
-      const forWindow = measured.filter((run) => run.window === def.id);
-      const ok = forWindow.filter((run) => run.status === 'Success');
-      // Only server-reported engine times are eligible as measurements.
-      const samples = ok
-        .map((run) => run.engineMs)
-        .filter((value): value is number => typeof value === 'number');
-      const stats = summarizeSamples(samples);
-      const counts = ok.map((run) => run.totalEventCount);
-      const bounds = ok[0] ?? forWindow[0];
-      return {
-        def,
-        stats,
-        errors: forWindow.length - ok.length,
-        consistent: countsAgree(counts),
-        eventCount: counts.find((value) => typeof value === 'number') ?? null,
-        bounds: bounds
-          ? formatBounds({
-              ...def,
-              earliestSec: bounds.earliestSec,
-              latestSec: bounds.latestSec,
-              earliestIso: new Date(bounds.earliestSec * 1000).toISOString(),
-              latestIso: new Date(bounds.latestSec * 1000).toISOString(),
-            })
-          : '—',
-      };
-    });
-  }, [measured]);
+    return chosen.flatMap((search) =>
+      WINDOWS.map((def) => {
+        const forRow = measured.filter((run) => run.searchId === search.id && run.window === def.id);
+        const ok = forRow.filter((run) => run.status === 'Success');
+        const totals = ok
+          .map((run) => run.totalMs)
+          .filter((value): value is number => typeof value === 'number');
+        const counts = ok.map((run) => run.totalEventCount);
+        const bounds = ok[0] ?? forRow[0];
+        return {
+          key: `${search.id}:${def.id}`,
+          search,
+          def,
+          total: summarizeSamples(totals),
+          engineMedian: medianOf(ok.map((run) => run.engineMs)),
+          queueMedian: medianOf(ok.map((run) => run.queueMs)),
+          errors: forRow.length - ok.length,
+          consistent: countsAgree(counts),
+          eventCount: counts.find((value) => typeof value === 'number') ?? null,
+          bounds: bounds
+            ? formatBounds({
+                ...def,
+                earliestSec: bounds.earliestSec,
+                latestSec: bounds.latestSec,
+                earliestIso: new Date(bounds.earliestSec * 1000).toISOString(),
+                latestIso: new Date(bounds.latestSec * 1000).toISOString(),
+              })
+            : '—',
+        };
+      }),
+    );
+  }, [chosen, measured]);
 
   const target = WINDOWS.length * config.repetitions;
 
@@ -363,7 +402,7 @@ export default function App() {
           run.engine === tier &&
           run.measured &&
           run.status === 'Success' &&
-          typeof run.engineMs === 'number',
+          typeof run.totalMs === 'number',
       ).length,
     [runs],
   );
@@ -378,6 +417,8 @@ export default function App() {
     [selectedDef, previewAnchor],
   );
 
+  const plannedRuns = chosen.length * (config.repetitions + 1);
+
   return (
     <div className={s.page}>
       <header className={s.header}>
@@ -390,10 +431,10 @@ export default function App() {
           </div>
           <h1>{__APP_DISPLAY_NAME__}</h1>
           <p>
-            Runs the hostname search across fixed time windows and reports the{' '}
-            <b>engine&rsquo;s own execution time</b> as measured server-side, not a browser
-            stopwatch. Bounds are resolved to absolute timestamps once per session so every
-            repetition searches identical data.
+            Measures <b>how long each search takes, start to finish</b>, using the server&rsquo;s own
+            clock rather than a browser stopwatch. Each time is split into waiting in the queue and
+            running on the engine. Every search runs several times so a single slow run cannot be
+            mistaken for the real figure.
           </p>
         </div>
         <div className={s.engineBadge}>
@@ -416,7 +457,7 @@ export default function App() {
 
       <section className={s.toolbar}>
         <div>
-          <label htmlFor="window">Window</label>
+          <label htmlFor="window">Time window</label>
           <select
             id="window"
             value={selectedWindow}
@@ -447,22 +488,30 @@ export default function App() {
             </select>
           </div>
         )}
-        <button className={s.primary} onClick={() => void runSession([selectedDef])} disabled={running}>
-          {running ? 'Running…' : 'Run selected window'}
+        <button
+          className={s.primary}
+          onClick={() => void runSession([selectedDef])}
+          disabled={running || !chosen.length}
+        >
+          {running ? 'Running…' : `Time ${chosen.length} ${chosen.length === 1 ? 'search' : 'searches'}`}
         </button>
-        <button className={s.secondary} onClick={() => void runSession(WINDOWS)} disabled={running}>
-          Run {labelTier(activeTier)} matrix
+        <button
+          className={s.secondary}
+          onClick={() => void runSession(WINDOWS)}
+          disabled={running || !chosen.length}
+        >
+          All {WINDOWS.length} windows
         </button>
         {running && (
           <button onClick={stop} className={s.stop}>
             Stop
           </button>
         )}
-        <Link className={s.linkButton} to="/compare">
-          Compare tiers
+        <Link className={s.linkButton} to="/searches">
+          Manage searches
         </Link>
-        <Link className={s.linkButtonPlain} to="/settings">
-          Configure
+        <Link className={s.linkButtonPlain} to="/compare">
+          Compare tiers
         </Link>
       </section>
 
@@ -470,49 +519,44 @@ export default function App() {
         <section className={s.card}>
           <div className={s.cardHeader}>
             <div>
-              <h2>Test definition</h2>
-              <span className={s.muted}>Only the time bounds vary by window</span>
+              <h2>Searches being timed</h2>
+              <span className={s.muted}>
+                {plannedRuns} searches per window ({config.repetitions} timed runs plus one warm-up
+                each)
+              </span>
             </div>
-            <span className={s.tag}>7 terms</span>
+            <Link className={s.tagLink} to="/searches">
+              Edit
+            </Link>
           </div>
 
-          <label htmlFor="dataset">Dataset</label>
+          {!library && <p className={s.muted}>Loading saved searches…</p>}
+          {library &&
+            chosen.map((search) => (
+              <div className={s.searchItem} key={search.id}>
+                <div className={s.searchName}>
+                  <b>{search.name}</b>
+                  <span className={s.muted}>{deriveDataset(search.text) || 'no dataset term'}</span>
+                </div>
+                <pre className={s.searchText}>{search.text}</pre>
+              </div>
+            ))}
+
+          <div className={s.boundsNote}>
+            <b>{selectedDef.id}</b> bounds if started now: <span className={s.mono}>{previewBounds}</span>
+            <span className={s.muted}>
+              Resolved to fixed timestamps when a session starts, so every run — and every search —
+              covers exactly the same data.
+            </span>
+          </div>
+
+          <label htmlFor="dataset">Default dataset for new searches</label>
           <input
             id="dataset"
             value={config.dataset}
             onChange={(event) => updateConfig({ dataset: event.target.value })}
             disabled={running}
           />
-
-          <label htmlFor="preview">Complete search for {selectedDef.id}</label>
-          <textarea
-            id="preview"
-            className={s.queryPreview}
-            rows={9}
-            readOnly
-            value={`${buildQuery(config)}\n\n-- bounds (absolute, resolved at run start)\n-- ${previewBounds}`}
-          />
-
-          <label htmlFor="logic">Search logic (editable)</label>
-          <textarea
-            id="logic"
-            rows={6}
-            value={config.query}
-            onChange={(event) => updateConfig({ query: event.target.value })}
-            disabled={running}
-          />
-
-          <div className={s.meta}>
-            <span>
-              Cache: <b>{config.cacheState}</b>
-            </span>
-            <span>
-              Repetitions: <b>{config.repetitions}</b>
-            </span>
-            <span>
-              Metric: <b>server timeCompleted − timeStarted</b>
-            </span>
-          </div>
         </section>
 
         <section className={s.card}>
@@ -537,9 +581,9 @@ export default function App() {
                 <strong>{labelTier(tier)}</strong>
                 <small>
                   {tier === activeTier
-                    ? `${engine?.status ?? 'active'} · ${completedFor(tier)}/${target} measured`
+                    ? `${engine?.status ?? 'active'} · ${completedFor(tier)}/${target} timed`
                     : completedFor(tier)
-                      ? `${completedFor(tier)}/${target} measured`
+                      ? `${completedFor(tier)}/${target} timed`
                       : tier === BASELINE_TIER || baselineDone
                         ? 'Available after resize'
                         : 'Locked until Medium completes'}
@@ -558,8 +602,8 @@ export default function App() {
 
           <p className={s.callout}>
             Resize is a deliberate live control-plane action. The app never changes engine size
-            automatically, and only unlocks larger tiers once Medium has {target} successful
-            measured runs.
+            automatically, and only unlocks larger tiers once Medium has {target} successful timed
+            runs.
           </p>
         </section>
       </div>
@@ -567,76 +611,143 @@ export default function App() {
       <section className={s.card}>
         <div className={s.cardHeader}>
           <div>
-            <h2>Summary by window — {labelTier(activeTier)}</h2>
+            <h2>How long each search took — {labelTier(activeTier)}</h2>
             <span className={s.muted}>
-              Server-measured engine time over successful measured runs. p95 needs{' '}
-              {P95_MIN_SAMPLES}+ samples; below that only min/median/max are meaningful.
+              Server-measured, start to finish. <b>Typical</b> is the middle run: half were faster,
+              half slower.
             </span>
           </div>
-          <span className={s.tag}>{measured.length} measured runs</span>
+          <div className={s.headerActions}>
+            <span className={s.tag}>{measured.length} timed runs</span>
+            <button onClick={() => setAdvanced(!advanced)}>
+              {advanced ? 'Hide statistics' : 'Show statistics'}
+            </button>
+          </div>
         </div>
         <table>
           <thead>
             <tr>
+              <th>Search</th>
               <th>Window</th>
-              <th>Bounds (UTC)</th>
-              <th>n</th>
-              <th>Median s</th>
-              <th>Min s</th>
-              <th>Max s</th>
-              <th>p95 s</th>
-              <th>CV</th>
+              <th title="How many timed runs this figure is based on">Runs</th>
+              <th>Typical total</th>
+              <th>Fastest</th>
+              <th>Slowest</th>
+              <th title="Part of the total spent waiting before the engine started">Of which queue</th>
+              <th title="Part of the total spent executing on the engine">Of which engine</th>
               <th>Events</th>
-              <th>Errors</th>
-              <th>Integrity</th>
+              {advanced && (
+                <>
+                  <th title={`95th percentile: only meaningful with ${P95_MIN_SAMPLES}+ runs`}>p95</th>
+                  <th title="Run-to-run variability as a percentage of the typical time">Variability</th>
+                  <th title="Absolute time range actually searched">Bounds (UTC)</th>
+                </>
+              )}
+              <th>Failed</th>
+              <th>Same data each run</th>
             </tr>
           </thead>
           <tbody>
-            {summary.map(({ def, stats, errors, consistent, eventCount, bounds }) => (
-              <tr key={def.id}>
+            {summary.map((row) => (
+              <tr key={row.key}>
+                <td>{row.search.name}</td>
                 <td>
-                  <b>{def.id}</b>
-                  <small>{def.label}</small>
+                  <b>{row.def.id}</b>
+                  <small>{row.def.label}</small>
                 </td>
-                <td className={s.mono}>{bounds}</td>
-                <td>{stats.n || '—'}</td>
-                <td>{formatSec(stats.median)}</td>
-                <td>{formatSec(stats.min)}</td>
-                <td>{formatSec(stats.max)}</td>
+                <td>{row.total.n || '—'}</td>
                 <td>
-                  {stats.p95 === null ? (
-                    <span className={s.muted} title={`Needs ${P95_MIN_SAMPLES} samples, have ${stats.n}`}>
-                      n&lt;{P95_MIN_SAMPLES}
-                    </span>
-                  ) : (
-                    formatSec(stats.p95)
-                  )}
+                  <b>{formatSec(row.total.median)}</b>
                 </td>
-                <td>{stats.cv === null ? '—' : `${(stats.cv * 100).toFixed(1)}%`}</td>
-                <td>{eventCount === null ? '—' : eventCount.toLocaleString()}</td>
-                <td>{errors || '—'}</td>
+                <td>{formatSec(row.total.min)}</td>
+                <td>{formatSec(row.total.max)}</td>
+                <td className={s.muted}>{formatSec(row.queueMedian)}</td>
+                <td>{formatSec(row.engineMedian)}</td>
+                <td>{row.eventCount === null ? '—' : row.eventCount.toLocaleString()}</td>
+                {advanced && (
+                  <>
+                    <td>
+                      {row.total.p95 === null ? (
+                        <span
+                          className={s.muted}
+                          title={`Needs ${P95_MIN_SAMPLES} runs, have ${row.total.n}`}
+                        >
+                          n&lt;{P95_MIN_SAMPLES}
+                        </span>
+                      ) : (
+                        formatSec(row.total.p95)
+                      )}
+                    </td>
+                    <td>{row.total.cv === null ? '—' : `${(row.total.cv * 100).toFixed(1)}%`}</td>
+                    <td className={s.mono}>{row.bounds}</td>
+                  </>
+                )}
+                <td>{row.errors || '—'}</td>
                 <td>
-                  {!stats.n ? (
-                    'Awaiting runs'
-                  ) : consistent ? (
-                    <span className={s.success}>Counts agree</span>
+                  {!row.total.n ? (
+                    'Not run yet'
+                  ) : row.consistent ? (
+                    <span className={s.success}>Yes</span>
                   ) : (
-                    <span className={s.failure}>Counts differ</span>
+                    <span className={s.failure}>No — data changed</span>
                   )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+
+        {advanced && (
+          <dl className={s.glossary}>
+            <div>
+              <dt>Typical (median)</dt>
+              <dd>
+                The middle run once they are sorted by time. Preferred over an average because one
+                unusually slow run cannot drag it.
+              </dd>
+            </div>
+            <div>
+              <dt>Runs (n)</dt>
+              <dd>How many timed runs the row is based on. More runs, more trustworthy figure.</dd>
+            </div>
+            <div>
+              <dt>p95</dt>
+              <dd>
+                The time 95 runs in 100 come in under — a &ldquo;bad but not freak&rdquo; case. Withheld
+                below {P95_MIN_SAMPLES} runs, where it would just repeat the slowest run.
+              </dd>
+            </div>
+            <div>
+              <dt>Variability</dt>
+              <dd>
+                How much run-to-run time scatters, as a percentage of the typical time. Under ~10% is
+                steady; above ~30% the environment is noisy and the figures are soft.
+              </dd>
+            </div>
+            <div>
+              <dt>Bounds</dt>
+              <dd>
+                The exact time range searched, as absolute timestamps. Identical across runs by
+                design, so comparisons are not confounded by the clock moving.
+              </dd>
+            </div>
+            <div>
+              <dt>Same data each run</dt>
+              <dd>
+                Whether every run matched the same number of events. &ldquo;No&rdquo; means the
+                underlying data changed mid-session, so the times are not strictly comparable.
+              </dd>
+            </div>
+          </dl>
+        )}
       </section>
 
       <section className={s.card}>
         <div className={s.cardHeader}>
           <div>
-            <h2>Individual run log</h2>
+            <h2>Every run</h2>
             <span className={s.muted}>
-              Durable history · newest first · queue time is reported separately and never charged
-              to the engine
+              Newest first · total is queue + engine as the server reported them
             </span>
           </div>
           <div className={s.headerActions}>
@@ -649,13 +760,13 @@ export default function App() {
         <table>
           <thead>
             <tr>
-              <th>Run ID</th>
-              <th>Job</th>
+              <th>When</th>
+              <th>Search</th>
               <th>Engine</th>
               <th>Window</th>
-              <th>Engine s</th>
+              <th>Total s</th>
               <th>Queue s</th>
-              <th>Client s</th>
+              <th>Engine s</th>
               <th>Events</th>
               <th>Status</th>
               <th>Notes</th>
@@ -664,32 +775,32 @@ export default function App() {
           <tbody>
             {runs.slice(0, 25).map((run) => (
               <tr key={run.id}>
-                <td className={s.mono}>{run.id}</td>
-                <td className={s.mono}>{run.jobId || '—'}</td>
+                <td className={s.mono}>{run.at.slice(11, 19)}Z</td>
+                <td>
+                  {run.searchName || '—'}
+                  <small className={s.mono}>{run.jobId || 'no job id'}</small>
+                </td>
                 <td>{labelTier(run.engine)}</td>
+                <td>{run.window}</td>
                 <td>
-                  {run.window}
-                  <small>{new Date(run.earliestSec * 1000).toISOString().slice(0, 16)}Z</small>
+                  <b>{formatSec(run.totalMs)}</b>
                 </td>
-                <td>
-                  <b>{formatSec(run.engineMs)}</b>
-                </td>
-                <td>{formatSec(run.queueMs)}</td>
-                <td className={s.muted}>{formatSec(run.clientMs)}</td>
+                <td className={s.muted}>{formatSec(run.queueMs)}</td>
+                <td>{formatSec(run.engineMs)}</td>
                 <td>{run.totalEventCount === null ? '—' : run.totalEventCount.toLocaleString()}</td>
                 <td>
                   <span className={run.status === 'Success' ? s.success : s.failure}>
                     {run.status}
                   </span>
                 </td>
-                <td>{run.notes || (run.measured ? 'Measured' : 'Warm-up')}</td>
+                <td>{run.notes || (run.measured ? 'Timed' : 'Warm-up')}</td>
               </tr>
             ))}
           </tbody>
         </table>
         {!runs.length && (
           <div className={s.empty}>
-            No runs yet. Start with the selected window or run the {labelTier(activeTier)} matrix.
+            No runs yet. Pick a window and press <b>Time {chosen.length || ''} searches</b>.
           </div>
         )}
       </section>
@@ -737,7 +848,8 @@ export default function App() {
             <h2 id="clear-title">Clear run history?</h2>
             <p>
               This deletes all {runs.length} recorded runs, including every tier already measured, and
-              cannot be undone. Export from <b>Compare tiers</b> first if the results still matter.
+              cannot be undone. Your saved searches are kept. Export from <b>Compare tiers</b> first if
+              the results still matter.
             </p>
             <div className={s.modalActions}>
               <button onClick={() => setPendingClear(false)}>Cancel</button>

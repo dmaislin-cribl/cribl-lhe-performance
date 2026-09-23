@@ -17,6 +17,7 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
     window: 'T1',
     earliestSec: 0,
     latestSec: 3600,
+    totalMs: 2,
     engineMs: 1,
     queueMs: 1,
     clientMs: 1,
@@ -28,6 +29,8 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
     dataset: 'd',
     queryHash: 'abc',
     searchGroup: 'default_search',
+    searchId: 's-1',
+    searchName: 'Test search',
     ...overrides,
   };
 }

@@ -45,3 +45,24 @@ table { width:100%; border-collapse:collapse; font-size:13px; }th { text-align:l
 .modalActions { display: flex; gap: 10px; justify-content: flex-end; }
 
 @media (max-width:900px) { .grid { grid-template-columns:1fr; }.header { flex-direction:column; }.toolbar { flex-wrap:wrap; }.toolbar > div { width:100%; }.linkButton { margin-left:0; } }
+
+/* Saved searches shown on the workbench: read-only context for what is being
+   timed. Editing lives on /searches so the definition has one owner. */
+.searchItem { border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md); padding: 10px 12px; margin-bottom: 10px; }
+.searchName { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 13px; }
+.searchName .muted { font-size: 11px; }
+.searchText {
+  margin: 8px 0 0; padding: 8px 10px; overflow-x: auto;
+  background: var(--cds-color-bg-subtle); border-radius: var(--cds-radius-sm);
+  font-family: var(--cds-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px; line-height: 1.55; white-space: pre-wrap; color: var(--cds-color-fg-muted);
+}
+.boundsNote { font-size: 12px; margin: 4px 0 16px; }
+.boundsNote .muted { margin-top: 4px; }
+.tagLink { font-size: 12px; font-weight: 600; color: var(--cds-color-accent); white-space: nowrap; }
+
+/* Plain-language definitions for the statistics columns, shown only in the
+   advanced view — the terms are jargon and the table cannot carry them. */
+.glossary { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px 24px; margin: 18px 0 0; }
+.glossary dt { font-size: 12px; font-weight: 700; }
+.glossary dd { margin: 3px 0 0; font-size: 12px; color: var(--cds-color-fg-muted); line-height: 1.55; }

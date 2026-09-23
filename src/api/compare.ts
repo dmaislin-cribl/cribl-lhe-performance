@@ -39,16 +39,28 @@ export interface ComparisonRow {
   cells: Record<string, Cell>;
 }
 
+/**
+ * Which recorded time to compare. `totalMs` — start to finish, queue included —
+ * is the default because it is the time the operator actually waited; `engineMs`
+ * isolates execution when the question is specifically about engine capacity.
+ */
+export type TimingField = 'totalMs' | 'engineMs';
+
 /** Runs eligible to be treated as measurements of a tier/window pair. */
-function samplesFor(runs: RunRecord[], tier: string, windowId: string) {
+function samplesFor(
+  runs: RunRecord[],
+  tier: string,
+  windowId: string,
+  field: TimingField = 'totalMs',
+) {
   const forPair = runs.filter(
     (run) => run.measured && run.engine === tier && run.window === windowId,
   );
   const ok = forPair.filter((run) => run.status === 'Success');
   return {
     errors: forPair.length - ok.length,
-    // Only server-reported engine times count; a null timing is not a measurement.
-    values: ok.map((run) => run.engineMs).filter((value): value is number => typeof value === 'number'),
+    // Only server-reported times count; a null timing is not a measurement.
+    values: ok.map((run) => run[field]).filter((value): value is number => typeof value === 'number'),
     counts: ok.map((run) => run.totalEventCount),
   };
 }
@@ -58,14 +70,15 @@ export function buildComparison(
   windows: WindowDef[],
   tiers: string[],
   baselineTier: string,
+  field: TimingField = 'totalMs',
 ): ComparisonRow[] {
   return windows.map((window) => {
     const hours = window.spanMs / 3_600_000;
-    const baseline = summarizeSamples(samplesFor(runs, baselineTier, window.id).values).median;
+    const baseline = summarizeSamples(samplesFor(runs, baselineTier, window.id, field).values).median;
 
     const cells: Record<string, Cell> = {};
     for (const tier of tiers) {
-      const { errors, values, counts } = samplesFor(runs, tier, window.id);
+      const { errors, values, counts } = samplesFor(runs, tier, window.id, field);
       const stats = summarizeSamples(values);
       cells[tier] = {
         stats,
@@ -84,16 +97,38 @@ export function buildComparison(
 }
 
 /** Tiers that actually have at least one measurement, in the given order. */
-export function tiersWithData(runs: RunRecord[], tiers: string[]): string[] {
+export function tiersWithData(
+  runs: RunRecord[],
+  tiers: string[],
+  field: TimingField = 'totalMs',
+): string[] {
   return tiers.filter((tier) =>
     runs.some(
       (run) =>
         run.engine === tier &&
         run.measured &&
         run.status === 'Success' &&
-        typeof run.engineMs === 'number',
+        typeof run[field] === 'number',
     ),
   );
+}
+
+/**
+ * Saved searches present in a run log, most-measured first, so a picker can
+ * default to the case the operator has actually been working on. Names come from
+ * the runs rather than the library: a search deleted from the library still has
+ * runs that need labelling.
+ */
+export function searchesInLog(runs: RunRecord[]): { id: string; name: string; runs: number }[] {
+  const counts = new Map<string, { id: string; name: string; runs: number }>();
+  for (const run of runs) {
+    if (!run.measured || run.status !== 'Success') continue;
+    const id = run.searchId || '(unattributed)';
+    const existing = counts.get(id);
+    if (existing) existing.runs += 1;
+    else counts.set(id, { id, name: run.searchName || 'Unnamed search', runs: 1 });
+  }
+  return [...counts.values()].sort((a, b) => b.runs - a.runs);
 }
 
 /**

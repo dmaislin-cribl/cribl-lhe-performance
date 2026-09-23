@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import LatencyChart, { type ChartSeries } from '../components/LatencyChart';
 import StatusBanner from '../components/StatusBanner';
-import { buildComparison, checkComparability, tiersWithData } from '../api/compare';
+import { buildComparison, checkComparability, searchesInLog, tiersWithData } from '../api/compare';
 import {
   DEFAULT_CONFIG,
   EMPTY_RUN_LOG,
@@ -32,7 +32,15 @@ import { BASELINE_TIER, ENGINE_TIERS, labelTier, tierColor } from '../api/tiers'
 import { WINDOWS } from '../api/windows';
 import s from './ComparePage.module.css';
 
-type Metric = 'median' | 'msPerHour';
+/**
+ * `total` is the default: it is the time someone actually waited for the search.
+ * `engine` isolates execution for the capacity question, and `msPerHour`
+ * normalises by window width to expose non-linear scaling.
+ */
+type Metric = 'total' | 'engine' | 'msPerHour';
+
+/** Sentinel for "do not filter by search" — a real id can never be empty. */
+const ALL_SEARCHES = '';
 
 /** Says what is wrong, not which enum member it is. */
 const WARNING_TITLES: Record<string, string> = {
@@ -43,8 +51,16 @@ const WARNING_TITLES: Record<string, string> = {
 };
 
 const METRIC_LABELS: Record<Metric, string> = {
-  median: 'Median engine time (seconds)',
+  total: 'Typical total time, start to finish (seconds)',
+  engine: 'Typical engine execution time only (seconds)',
   msPerHour: 'Normalized: ms per hour of window scanned',
+};
+
+const METRIC_NOTES: Record<Metric, string> = {
+  total: 'Queue wait plus execution, as the server clocked it — the wait an operator actually experiences.',
+  engine: 'Execution only, queue excluded. Use this when the question is engine capacity rather than end-to-end wait.',
+  msPerHour:
+    'Flat across windows means the tier scales linearly with the scanned range; a rising curve is the finding worth showing a customer.',
 };
 
 /** Compact axis/tooltip formatting — 3 dp is noise on an axis tick. */
@@ -59,8 +75,9 @@ function formatMsPerHour(value: number): string {
 export default function ComparePage() {
   const [log, setLog] = useState<RunLog>(EMPTY_RUN_LOG);
   const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
-  const [metric, setMetric] = useState<Metric>('median');
+  const [metric, setMetric] = useState<Metric>('total');
   const [baseline, setBaseline] = useState(BASELINE_TIER);
+  const [searchId, setSearchId] = useState<string | null>(null);
   const [copied, setCopied] = useState('');
 
   useEffect(() => {
@@ -68,21 +85,41 @@ export default function ComparePage() {
     void loadConfig().then(setConfig);
   }, []);
 
+  const searches = useMemo(() => searchesInLog(log.runs), [log.runs]);
+
+  /**
+   * Default to the most-measured search rather than to everything. Mixing two
+   * searches into one median is the single easiest way to produce a number that
+   * looks clean and means nothing, so the safe view is the one shown first.
+   */
+  const activeSearchId = searchId ?? searches[0]?.id ?? ALL_SEARCHES;
+
+  const scoped = useMemo(
+    () =>
+      activeSearchId === ALL_SEARCHES
+        ? log.runs
+        : log.runs.filter((run) => (run.searchId || '(unattributed)') === activeSearchId),
+    [log.runs, activeSearchId],
+  );
+
+  /** Engine time and total time are different columns of the same run. */
+  const field = metric === 'engine' ? 'engineMs' : 'totalMs';
+
   const tiers = useMemo(() => {
-    const present = tiersWithData(log.runs, ENGINE_TIERS);
+    const present = tiersWithData(scoped, ENGINE_TIERS, field);
     // Always show the baseline column, even before it has data, so the reader
     // can see what the comparison is measured against.
     return present.includes(baseline) ? present : [baseline, ...present];
-  }, [log.runs, baseline]);
+  }, [scoped, baseline, field]);
 
   const rows = useMemo(
-    () => buildComparison(log.runs, WINDOWS, tiers, baseline),
-    [log.runs, tiers, baseline],
+    () => buildComparison(scoped, WINDOWS, tiers, baseline, field),
+    [scoped, tiers, baseline, field],
   );
 
   const warnings = useMemo(
-    () => checkComparability(log.runs, rows, tiers, config.repetitions),
-    [log.runs, rows, tiers, config.repetitions],
+    () => checkComparability(scoped, rows, tiers, config.repetitions),
+    [scoped, rows, tiers, config.repetitions],
   );
 
   const series: ChartSeries[] = useMemo(
@@ -111,6 +148,8 @@ export default function ComparePage() {
       dataset: config.dataset,
       'search group': config.searchGroup,
       'cache state (operator annotation)': config.cacheState,
+      search: searches.find((entry) => entry.id === activeSearchId)?.name ?? 'all searches (mixed)',
+      metric: METRIC_LABELS[metric],
       baseline: labelTier(baseline),
     });
 
@@ -120,10 +159,10 @@ export default function ComparePage() {
     <div className={s.page}>
       <h1>Engine tier comparison</h1>
       <p className={s.intro}>
-        Server-measured engine execution time per window, by engine tier, over successful measured
-        runs only. Speedup is <b>{labelTier(baseline)} median ÷ tier median</b>, so a value above 1.00
-        means the tier was faster than the baseline. Warm-up runs, failures and runs with no
-        server-reported timing are excluded everywhere on this page.
+        How long one saved search took per time window, by engine tier, over successful timed runs
+        only. Speedup is <b>{labelTier(baseline)} time ÷ tier time</b>, so a value above 1.00 means the
+        tier was faster than the baseline. Warm-up runs, failures and runs with no server-reported
+        timing are excluded everywhere on this page.
       </p>
 
       {copied && <StatusBanner kind="info">{copied}</StatusBanner>}
@@ -141,6 +180,23 @@ export default function ComparePage() {
       ))}
 
       <div className={s.filters}>
+        <div>
+          <label htmlFor="search">Search</label>
+          <select
+            id="search"
+            value={activeSearchId}
+            onChange={(event) => setSearchId(event.target.value)}
+            disabled={!searches.length}
+          >
+            {searches.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name} ({entry.runs} runs)
+              </option>
+            ))}
+            {searches.length > 1 && <option value={ALL_SEARCHES}>All searches together (mixed)</option>}
+            {!searches.length && <option value={ALL_SEARCHES}>No runs recorded yet</option>}
+          </select>
+        </div>
         <div>
           <label htmlFor="metric">Metric</label>
           <select id="metric" value={metric} onChange={(event) => setMetric(event.target.value as Metric)}>
@@ -180,11 +236,7 @@ export default function ComparePage() {
         <div className={s.cardHeader}>
           <div>
             <h2>{METRIC_LABELS[metric]}</h2>
-            <span className={s.muted}>
-              {metric === 'msPerHour'
-                ? 'Flat across windows means the tier scales linearly with the scanned range; a rising curve is the finding worth showing a customer.'
-                : 'Median of the server-reported engine execution time per window.'}
-            </span>
+            <span className={s.muted}>{METRIC_NOTES[metric]}</span>
           </div>
         </div>
         <LatencyChart
@@ -262,8 +314,8 @@ export default function ComparePage() {
           </table>
         ) : (
           <div className={s.empty}>
-            No measured runs yet. Run a matrix on the Overview page — then resize the engine and run
-            it again to populate a second column.
+            No timed runs yet for this search. Time it on the Overview page — then resize the engine
+            and run it again to populate a second column.
           </div>
         )}
         <p className={s.note}>
