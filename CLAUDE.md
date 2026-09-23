@@ -1,4 +1,4 @@
-# lakehouse-performance
+# cribl-lhe-performance
 
 A Cribl Search App (Vite + React + TypeScript) that runs inside
 Cribl Search as a sandboxed iframe. Ship target: Cribl Cloud.

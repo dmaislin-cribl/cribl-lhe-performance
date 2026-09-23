@@ -11,6 +11,16 @@
  * (App.tsx's router basename is the usual one) would stop compiling the
  * moment the package stops declaring them. Own the declaration here.
  */
+/**
+ * Build-time constants substituted by Vite's `define` (see vite.config.ts),
+ * read from package.json at config time. They are literals in the emitted
+ * bundle, so they always describe the build that is actually running — which
+ * matters because `apps package` bumps the version on every pack.
+ */
+declare const __APP_ID__: string;
+declare const __APP_VERSION__: string;
+declare const __APP_DISPLAY_NAME__: string;
+
 interface Window {
   /** Base URL for Cribl API calls from inside the iframe. */
   CRIBL_API_URL?: string;

@@ -85,8 +85,29 @@ const injectScriptFromQueryPlugin = () => {
   };
 };
 
+/**
+ * App name and version, read at config time from package.json and exposed to
+ * app code as compile-time constants.
+ *
+ * Why not `import pkg from '../package.json'` in a component: that pulls the
+ * whole manifest — including the devDependency list — into the browser bundle.
+ * Why not hardcode the version in a source file: `apps package` bumps
+ * package.json on every pack, so a copy would silently go stale, which is worse
+ * than showing nothing.
+ */
+const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as {
+  name?: string
+  version?: string
+  displayName?: string
+}
+
 export default defineConfig({
   plugins: [react(), packageEndpointPlugin(), injectScriptFromQueryPlugin(), backendWatchPlugin(), backendPreviewPlugin()],
+  define: {
+    __APP_ID__: JSON.stringify(pkg.name ?? 'unknown'),
+    __APP_VERSION__: JSON.stringify(pkg.version ?? '0.0.0'),
+    __APP_DISPLAY_NAME__: JSON.stringify(pkg.displayName ?? pkg.name ?? 'Cribl app'),
+  },
   base: './',
   resolve: {
     // @criblio/app-utils declares React as a peer dep, so its own tree has

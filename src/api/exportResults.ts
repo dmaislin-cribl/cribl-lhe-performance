@@ -159,7 +159,7 @@ export function comparisonToMarkdown(rows: ComparisonRow[], tiers: string[]): st
 export function provenanceBlock(log: RunLog, extra: Record<string, string> = {}): string {
   const measured = log.runs.filter((run) => run.measured && run.status === 'Success');
   const lines = [
-    `# Cribl Lakehouse Engine Performance Lab`,
+    `# ${__APP_DISPLAY_NAME__} ${__APP_ID__} v${__APP_VERSION__}`,
     `# exported: ${new Date().toISOString()}`,
     `# measured runs: ${measured.length}`,
     `# metric: engine execution time (server timeCompleted - timeStarted)`,

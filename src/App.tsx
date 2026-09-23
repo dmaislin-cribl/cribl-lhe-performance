@@ -382,8 +382,13 @@ export default function App() {
     <div className={s.page}>
       <header className={s.header}>
         <div>
-          <div className={s.eyebrow}>SEARCH / PERFORMANCE LAB</div>
-          <h1>Lakehouse Engine Performance Test</h1>
+          <div className={s.eyebrow}>
+            SEARCH / PERFORMANCE LAB
+            <span className={s.version} title={`app id: ${__APP_ID__}`}>
+              v{__APP_VERSION__}
+            </span>
+          </div>
+          <h1>{__APP_DISPLAY_NAME__}</h1>
           <p>
             Runs the hostname search across fixed time windows and reports the{' '}
             <b>engine&rsquo;s own execution time</b> as measured server-side, not a browser

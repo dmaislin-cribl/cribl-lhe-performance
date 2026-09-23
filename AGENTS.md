@@ -1,4 +1,7 @@
-# Lakehouse Performance Lab
+# Cribl LHE Performance Lab
+
+App id (`package.json` `name`): `cribl-lhe-performance`. The id is deliberately
+version-free — see "App id and version" below before changing it.
 
 ## Overview
 This app runs the approved seven-term hostname KQL against the Fortinet_Syslog dataset across eight time windows (T1 1h … T8 14d). It records a warm-up plus configurable measured repetitions per window in the app-scoped KV store, and reports the **engine's own execution time** per tier, with a cross-tier comparison view and clipboard export.
@@ -9,6 +12,17 @@ The headline metric is `timeCompleted - timeStarted` from the **metadata header 
 - `src/api/perfRun.ts` owns job submission and timing. Do **not** switch it back to `runQuery`: that helper polls on a fixed 400 ms interval, caps runs at a non-overridable 48 s, and discards line 0 of the results payload — the only line carrying the timings and the true event count.
 - `src/api/windows.ts` resolves every window **once per session** against a single anchor, to absolute epoch seconds. Relative bounds re-evaluated per search would average repetitions taken over different data.
 - `src/api/stats.ts` withholds p95 below `P95_MIN_SAMPLES` (20). Nearest-rank p95 over a handful of samples is arithmetically the maximum, so reporting it would overstate what was measured.
+
+## App id and version
+`package.json` `name` is the **app id**, and it must stay version-free. The workspace keys an installed app by that id, so `cribl-lhe-performance-1-2` would install as a *different* app rather than upgrading in place — and since the KV store is app-scoped, every recorded run would be stranded under the old id. `.github/workflows/release.yml` also asserts the `vX.Y.Z` tag equals `package.json` `version`, which only works while the version lives in that one field.
+
+The version appears in three places instead, all derived from `package.json` so none can drift:
+
+- the packaged archive, which `apps package` names `<name>-<version>.tgz`;
+- the app header, from the build-time constant `__APP_VERSION__`;
+- the first line of every clipboard export, so a number pasted into a customer deck can be traced to the build that produced it.
+
+`__APP_ID__`, `__APP_VERSION__` and `__APP_DISPLAY_NAME__` are Vite `define` substitutions (`vite.config.ts`, declared in `src/vite-env.d.ts`). Read them, don't `import` package.json — that drags the devDependency list into the browser bundle — and don't hardcode a copy, because `apps package` bumps the version on every pack and a copy would go stale silently.
 
 ## Architecture
 `src/App.tsx` is the workbench; `src/routes/ComparePage.tsx` is the cross-tier comparison (`src/api/compare.ts` derives it, `src/api/exportResults.ts` serialises it); `src/routes/SettingsPage.tsx` holds config. `src/api/kv.ts` is a two-key KV accessor — the framework's `loadSettings`/`saveSettings` hardcode a single key, and config and run history have very different write rates. Config and the run log are therefore separate KV records. Engine inventory and resize use the Search API scoped to the configured worker group. No backend endpoint or external proxy is required, so there is no `config/backend.yml` and no `backend/` directory.

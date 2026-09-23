@@ -1,6 +1,9 @@
 .page { max-width: 1400px; margin: 0 auto; }
 .header { display:flex; justify-content:space-between; gap:24px; align-items:flex-start; margin-bottom:24px; }
 .eyebrow { color:var(--cds-color-accent); font-size:11px; font-weight:700; letter-spacing:.12em; margin-bottom:6px; }
+/* Build identifier: present for provenance, recessive so it never competes
+   with the title. Same ink as other muted metadata, not the accent. */
+.version { color:var(--cds-color-fg-muted); font-weight:600; letter-spacing:.04em; margin-left:8px; }
 h1 { font-size:28px; line-height:1.2; margin-bottom:8px; }
 h2 { font-size:16px; margin:0; }
 .header p { color:var(--cds-color-fg-muted); max-width:760px; }
