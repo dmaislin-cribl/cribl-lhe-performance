@@ -1,0 +1,13 @@
+# Product API access required by the Lakehouse Performance Lab.
+# App visibility/ACL is controlled by the workspace install, not this file.
+policies:
+  # Search execution and result polling used by @criblio/app-utils/search.
+  - object: '/m/:gid/search/jobs'
+    actions: ['GET', 'POST']
+  - object: '/m/:gid/search/jobs/*'
+    actions: ['GET', 'DELETE']
+  # Lakehouse Engine inventory and explicit resize control.
+  - object: '/m/:gid/search/local_search/engines'
+    actions: ['GET']
+  - object: '/m/:gid/search/local_search/engines/*'
+    actions: ['PATCH']

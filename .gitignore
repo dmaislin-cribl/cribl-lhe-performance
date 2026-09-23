@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+package-build/
+.env
+playwright/.auth/
+test-results/
+backend-build/
+
+# OS cruft
+.DS_Store
+
+# Packaged app archives
+*.tgz

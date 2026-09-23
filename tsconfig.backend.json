@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.backend.tsbuildinfo",
+    "composite": true,
+    "target": "es2023",
+    /* DOM supplies the `fetch`/`Request`/`Response` globals the fused runtime provides. */
+    "lib": ["ES2023", "DOM"],
+    /* Endpoints run in the platform's fused runtime, not Node and not the browser bundle — so pull
+       in no ambient @types at all rather than leaking `vite/client` or `node` globals into scope. */
+    "types": [],
+    "skipLibCheck": true,
+
+    /* Bundler mode: `apps build` bundles these with esbuild, so tsc only ever type-checks. This is
+       also what lets `import './net.js'` resolve to `net.ts`, the way esbuild resolves it. */
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting. `noUnusedParameters` is deliberately omitted: a handler receives the full
+       `(request, context)` signature whether or not it reads both. */
+    "strict": true,
+    "noUnusedLocals": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["backend"],
+  /* `apps build` output. Generated CommonJS that keeps the source extension, so it must never be
+     type-checked as authored TypeScript (the bundles also carry a `@ts-nocheck` banner). */
+  "exclude": ["backend-build"]
+}

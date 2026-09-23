@@ -1,0 +1,8 @@
+# External API declarations for the Cribl App Platform fetch proxy.
+# Add entries here for any external domains your app needs to reach.
+# Example:
+# - host: api.example.com
+#   paths:
+#     - /v1/
+#   headers:
+#     Authorization: Bearer ${API_KEY}

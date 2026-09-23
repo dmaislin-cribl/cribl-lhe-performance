@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  # GitHub Packages requires auth even for public @criblio reads — see .npmrc.
+  packages: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Verify tag matches package version
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
+      # The skeleton ships no package-lock.json: pinning every dependency
+      # at scaffold time would hand each new app a tree that is already
+      # stale. But the release-build action runs `npm ci`, and its
+      # setup-node step uses `cache: npm` — both hard-fail with no
+      # lockfile, so a freshly generated app's first CI run never reaches
+      # its own code. Generate one here: after checkout, before the
+      # action, where both can find it.
+      #
+      # Only when absent. Once an app commits its lockfile it must build
+      # from those exact pins, and `--package-lock-only` re-resolves
+      # against package.json — which would quietly turn `npm ci` back
+      # into `npm install` and make the build unreproducible.
+      - name: Generate lockfile
+        run: |
+          set -euo pipefail
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only
+          fi
+      # Registry mode — see the note in ci.yml. The SHA pins the action,
+      # not a framework source dependency.
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@5c7659bbcbdd0a4ef366f4767bfee70cf5523251
+        with:
+          registry-token: ${{ github.token }}
+          # `apps package` bumps package.json before packing, so without this
+          # the release would attest an artifact a patch ahead of its own tag.
+          app-version: ${{ github.ref_name }}
+      - name: Upgrade validation workspace with exact candidate
+        env:
+          CRIBL_BASE_URL: ${{ secrets.CRIBL_RELEASE_VALIDATION_BASE_URL }}
+          CRIBL_CLIENT_ID: ${{ secrets.CRIBL_RELEASE_VALIDATION_CLIENT_ID }}
+          CRIBL_CLIENT_SECRET: ${{ secrets.CRIBL_RELEASE_VALIDATION_CLIENT_SECRET }}
+        run: npm run deploy -- --artifact build/*.tgz
+      - name: Attest exact tested package
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: build/*.tgz
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: build/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
