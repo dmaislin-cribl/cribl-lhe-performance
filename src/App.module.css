@@ -11,4 +11,21 @@ h2 { font-size:16px; margin:0; }
 button,.linkButton { border:1px solid var(--cds-color-border); border-radius:4px; padding:9px 13px; font-weight:600; background:var(--cds-color-bg); color:var(--cds-color-fg); text-decoration:none; }.primary { background:var(--cds-color-primary); color:white; border-color:var(--cds-color-primary); }.secondary { background:var(--cds-brand-navy); color:white; border-color:var(--cds-brand-navy); }button:disabled { opacity:.5; cursor:not-allowed; }
 select,input,textarea { border:1px solid var(--cds-color-border); border-radius:4px; background:var(--cds-color-bg); color:var(--cds-color-fg); padding:8px 10px; width:100%; }textarea { font-family:var(--cds-font-mono); font-size:12px; line-height:1.55; resize:vertical; }.queryPreview { background:var(--cds-color-bg-muted); color:var(--cds-color-fg); margin-bottom:12px; white-space:pre; overflow:auto; }.grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }.card { background:var(--cds-color-bg); border:1px solid var(--cds-color-border); border-radius:6px; padding:18px; margin-bottom:16px; }.cardHeader { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px; }.muted,small { display:block; color:var(--cds-color-fg-muted); font-size:12px; }.tag { background:var(--cds-color-bg-muted); padding:4px 8px; border-radius:12px; font-size:11px; font-weight:700; white-space:nowrap; }.tagGood { background:var(--cds-color-success-subtle); color:var(--cds-color-success); }.card label + input,.card label + textarea { margin-bottom:12px; }.meta { display:flex; gap:14px; color:var(--cds-color-fg-muted); font-size:12px; margin-top:4px; }.meta b { color:var(--cds-color-fg); }.progress { height:6px; background:var(--cds-color-bg-muted); border-radius:5px; overflow:hidden; margin:8px 0 16px; }.progress div { height:100%; background:var(--cds-color-accent); transition:width .2s; }.tierList { display:flex; flex-direction:column; gap:8px; }.tier { display:grid; grid-template-columns:28px 1fr 1fr auto; gap:10px; align-items:center; padding:8px; border:1px solid var(--cds-color-border-subtle); border-radius:4px; }.tier > span { width:22px; height:22px; border-radius:50%; background:var(--cds-color-bg-muted); text-align:center; padding-top:2px; font-size:12px; }.tier > span.current { background:var(--cds-color-accent); color:white; }.tier button { padding:5px 8px; font-size:11px; }.callout { color:var(--cds-color-fg-muted); font-size:12px; margin-top:14px; }.linkButton { margin-left:auto; }
 table { width:100%; border-collapse:collapse; font-size:13px; }th { text-align:left; color:var(--cds-color-fg-muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--cds-color-border); padding:9px 8px; }td { border-bottom:1px solid var(--cds-color-border-subtle); padding:10px 8px; vertical-align:top; }tr:last-child td { border-bottom:0; }.mono { font-family:var(--cds-font-mono); font-size:12px; }.success { color:var(--cds-color-success); font-weight:600; }.failure { color:var(--cds-color-danger); font-weight:600; }.empty { text-align:center; color:var(--cds-color-fg-muted); padding:28px; }
+/* Stop control for an in-flight run. */
+.stop { background: var(--cds-color-danger); color: #fff; border-color: var(--cds-color-danger); }
+
+/* Resize confirmation. An in-app dialog, because native modals can be
+   suppressed in the sandboxed iframe this app runs inside. */
+.modalScrim {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 50;
+}
+.modal {
+  background: var(--cds-color-bg); border: 1px solid var(--cds-color-border);
+  border-radius: var(--cds-radius-lg); box-shadow: var(--cds-shadow-lg);
+  padding: 22px; max-width: 460px; width: 100%;
+}
+.modal p { color: var(--cds-color-fg-muted); margin: 10px 0 20px; }
+.modalActions { display: flex; gap: 10px; justify-content: flex-end; }
+
 @media (max-width:900px) { .grid { grid-template-columns:1fr; }.header { flex-direction:column; }.toolbar { flex-wrap:wrap; }.toolbar > div { width:100%; }.linkButton { margin-left:0; } }

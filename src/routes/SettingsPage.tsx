@@ -1,13 +1,108 @@
 import { useEffect, useState } from 'react';
-import { loadSettings, saveSettings } from '../api/appSettings';
+import { DEFAULT_CONFIG, loadConfig, saveConfig, type LabConfig } from '../api/appSettings';
+import { P95_MIN_SAMPLES } from '../api/stats';
 import StatusBanner from '../components/StatusBanner';
 
 export default function SettingsPage() {
-  const [dataset, setDataset] = useState('Fortinet_Syslog');
-  const [repetitions, setRepetitions] = useState(5);
-  const [cacheState, setCacheState] = useState('Warm');
+  const [config, setConfig] = useState<LabConfig>(DEFAULT_CONFIG);
   const [saved, setSaved] = useState(false);
-  useEffect(() => { void loadSettings().then((settings) => { if (typeof settings.dataset === 'string') setDataset(settings.dataset); if (typeof settings.repetitions === 'number') setRepetitions(settings.repetitions); if (typeof settings.cacheState === 'string') setCacheState(settings.cacheState); }); }, []);
-  const save = async () => { const current = await loadSettings(); await saveSettings({ ...current, dataset, repetitions, cacheState }); setSaved(true); window.setTimeout(() => setSaved(false), 2000); };
-  return <div style={{ maxWidth: 700 }}><h1>Lab configuration</h1><p style={{ color: 'var(--cds-color-fg-muted)', margin: '8px 0 20px' }}>Parameters are stored in the app-scoped KV store and reused by the test workbench.</p>{saved && <StatusBanner kind="info">Configuration saved</StatusBanner>}<label>Default dataset</label><input value={dataset} onChange={(event) => setDataset(event.target.value)} style={{ width: '100%', padding: 8, margin: '6px 0 16px' }} /><label>Measured repetitions per window</label><input type="number" min={5} max={50} value={repetitions} onChange={(event) => setRepetitions(Math.max(5, Number(event.target.value)))} style={{ width: '100%', padding: 8, margin: '6px 0 16px' }} /><label>Cache state label</label><select value={cacheState} onChange={(event) => setCacheState(event.target.value)} style={{ width: '100%', padding: 8, margin: '6px 0 20px' }}><option>Warm</option><option>Cold</option><option>Disabled</option><option>Unknown</option></select><button onClick={() => void save()} style={{ padding: '9px 18px', background: 'var(--cds-color-primary)', color: 'white', border: 0, borderRadius: 4, fontWeight: 600 }}>Save configuration</button></div>;
+  const [error, setError] = useState('');
+
+  // Load the same config record the workbench uses, so the two pages cannot
+  // disagree about the dataset or repetition count.
+  useEffect(() => {
+    void loadConfig().then(setConfig);
+  }, []);
+
+  const save = async () => {
+    try {
+      await saveConfig(config);
+      setError('');
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const field = { width: '100%', padding: 8, margin: '6px 0 6px' } as const;
+  const hint = {
+    color: 'var(--cds-color-fg-muted)',
+    fontSize: 12,
+    display: 'block',
+    marginBottom: 16,
+  } as const;
+
+  return (
+    <div style={{ maxWidth: 700 }}>
+      <h1>Lab configuration</h1>
+      <p style={{ color: 'var(--cds-color-fg-muted)', margin: '8px 0 20px' }}>
+        Parameters are stored in the app-scoped KV store and reused by the test workbench.
+      </p>
+
+      {saved && <StatusBanner kind="info">Configuration saved</StatusBanner>}
+      {error && <StatusBanner kind="error">{error}</StatusBanner>}
+
+      <label htmlFor="dataset">Default dataset</label>
+      <input
+        id="dataset"
+        value={config.dataset}
+        onChange={(event) => setConfig({ ...config, dataset: event.target.value })}
+        style={field}
+      />
+      <span style={hint}>The dataset the windowed search runs against.</span>
+
+      <label htmlFor="repetitions">Measured repetitions per window</label>
+      <input
+        id="repetitions"
+        type="number"
+        min={1}
+        max={200}
+        value={config.repetitions}
+        onChange={(event) =>
+          setConfig({
+            ...config,
+            repetitions: Math.min(200, Math.max(1, Number(event.target.value) || 1)),
+          })
+        }
+        style={field}
+      />
+      <span style={hint}>
+        Each window also runs one unmeasured warm-up. A p95 is only reported at{' '}
+        {P95_MIN_SAMPLES}+ repetitions — below that, nearest-rank p95 is arithmetically identical to
+        the maximum, so the summary shows min/median/max instead.
+      </span>
+
+      <label htmlFor="cache">Cache state label</label>
+      <select
+        id="cache"
+        value={config.cacheState}
+        onChange={(event) => setConfig({ ...config, cacheState: event.target.value })}
+        style={field}
+      >
+        <option>Unknown</option>
+        <option>Warm</option>
+        <option>Cold</option>
+        <option>Disabled</option>
+      </select>
+      <span style={hint}>
+        Recorded as an operator-supplied annotation only. The app cannot observe or control engine
+        caching, so this label is not verified — leave it Unknown unless you set the state yourself.
+      </span>
+
+      <button
+        onClick={() => void save()}
+        style={{
+          padding: '9px 18px',
+          background: 'var(--cds-color-primary)',
+          color: 'white',
+          border: 0,
+          borderRadius: 4,
+          fontWeight: 600,
+        }}
+      >
+        Save configuration
+      </button>
+    </div>
+  );
 }
