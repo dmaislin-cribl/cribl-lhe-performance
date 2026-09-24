@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { buildComparison, checkComparability, tiersWithData } from './compare';
 import type { RunRecord } from './appSettings';
-import { WINDOWS } from './windows';
+import { DEFAULT_WINDOWS } from './windows';
 
-const T1 = WINDOWS[0]; // 1 hour
-const T2 = WINDOWS[1]; // 4 hours
+const T1 = DEFAULT_WINDOWS[0]; // 1 hour
+const T2 = DEFAULT_WINDOWS[1]; // 4 hours
 
 function run(overrides: Partial<RunRecord>): RunRecord {
   return {
@@ -27,6 +27,8 @@ function run(overrides: Partial<RunRecord>): RunRecord {
     searchGroup: 'default_search',
     searchId: 's-1',
     searchName: 'Test search',
+    sessionId: 'run-1',
+    sessionName: 'Fixture session',
     ...overrides,
     // The comparison defaults to total time, so fixtures mirror engineMs into
     // totalMs: an assertion written against engineMs stays readable, and the
@@ -122,12 +124,12 @@ describe('checkComparability', () => {
 
   it('is silent on a clean, complete set', () => {
     const runs = [run({}), run({})];
-    expect(checkComparability(runs, rowsFor(runs, ['medium']), ['medium'], 2)).toEqual([]);
+    expect(checkComparability(runs, rowsFor(runs, ['medium']), ['medium'], () => 2)).toEqual([]);
   });
 
   it('warns when the run log spans more than one query revision', () => {
     const runs = [run({ queryHash: 'abc' }), run({ queryHash: 'zzz' })];
-    const kinds = checkComparability(runs, rowsFor(runs, ['medium']), ['medium'], 2).map(
+    const kinds = checkComparability(runs, rowsFor(runs, ['medium']), ['medium'], () => 2).map(
       (warning) => warning.kind,
     );
     expect(kinds).toContain('query');
@@ -135,7 +137,7 @@ describe('checkComparability', () => {
 
   it('warns when runs span more than one dataset', () => {
     const runs = [run({ dataset: 'a' }), run({ dataset: 'b' })];
-    const kinds = checkComparability(runs, rowsFor(runs, ['medium']), ['medium'], 2).map(
+    const kinds = checkComparability(runs, rowsFor(runs, ['medium']), ['medium'], () => 2).map(
       (warning) => warning.kind,
     );
     expect(kinds).toContain('dataset');
@@ -144,8 +146,19 @@ describe('checkComparability', () => {
   it('warns about an incomplete sample set but not an empty one', () => {
     const partial = [run({})];
     expect(
-      checkComparability(partial, rowsFor(partial, ['medium']), ['medium'], 20).map((w) => w.kind),
+      checkComparability(partial, rowsFor(partial, ['medium']), ['medium'], () => 20).map((w) => w.kind),
     ).toContain('partial');
-    expect(checkComparability([], rowsFor([], ['medium']), ['medium'], 20)).toEqual([]);
+    expect(checkComparability([], rowsFor([], ['medium']), ['medium'], () => 20)).toEqual([]);
+  });
+
+  // Per-window counts: a window deliberately set to 2 repetitions is complete at
+  // 2 and must not be reported as a thin sample against another window's 20.
+  it('measures completeness per window, not against one global count', () => {
+    const runs = [run({ window: 'T1' }), run({ window: 'T1' })];
+    const rows = rowsFor(runs, ['medium']);
+    expect(checkComparability(runs, rows, ['medium'], (id) => (id === 'T1' ? 2 : 20))).toEqual([]);
+    expect(
+      checkComparability(runs, rows, ['medium'], () => 20).map((w) => w.kind),
+    ).toContain('partial');
   });
 });

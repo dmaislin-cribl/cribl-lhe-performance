@@ -15,7 +15,9 @@ import { loadRunLog, type RunRecord } from '../api/appSettings';
 import {
   MAX_SEARCHES,
   MAX_SELECTED,
+  SEARCH_PLACEHOLDER,
   canSelectMore,
+  isRunnable,
   deleteSearch,
   deriveDataset,
   duplicateSearch,
@@ -58,8 +60,10 @@ export default function SearchesPage() {
   useEffect(() => {
     void loadLibrary().then((loaded) => {
       setLibrary(loaded);
-      const first =
-        loaded.searches.find((entry) => entry.id === loaded.selectedIds[0]) ?? loaded.searches[0];
+      // The library ships empty, so there may be nothing to open. Leaving the
+      // editor closed is the correct first screen — see the empty state below.
+      const first = loaded.searches.find((entry) => entry.id === loaded.selectedIds[0]) ?? loaded.searches[0];
+      if (!first) return;
       setEditingId(first.id);
       setDraft(toDraft(first));
     });
@@ -142,9 +146,10 @@ export default function SearchesPage() {
     if (!library || !pendingDelete) return;
     const next = deleteSearch(library, pendingDelete.id);
     setPendingDelete(null);
-    const nowEditing = next.searches.find((entry) => entry.id === editingId) ?? next.searches[0];
-    setEditingId(nowEditing.id);
-    setDraft(toDraft(nowEditing));
+    // Deleting the last search is allowed, so there may be nothing left to edit.
+    const nowEditing = next.searches.find((entry) => entry.id === editingId) ?? next.searches[0] ?? null;
+    setEditingId(nowEditing?.id ?? '');
+    setDraft(nowEditing ? toDraft(nowEditing) : null);
     void commit(next, `Deleted “${pendingDelete.name}”. Its recorded runs are unchanged.`);
   }, [library, pendingDelete, editingId, commit]);
 
@@ -153,9 +158,12 @@ export default function SearchesPage() {
       if (!library) return;
       const next = toggleSelected(library, id);
       if (next === library) {
+        // Two different refusals, and telling them apart is the whole value of the
+        // message: one is a cap to clear, the other is a search with nothing in it.
+        const target = library.searches.find((entry) => entry.id === id);
         setError(
-          isSelected(library, id)
-            ? 'At least one search has to be selected — the lab needs something to run.'
+          target && !isRunnable(target)
+            ? `“${target.name}” has no search text yet, so there is nothing to measure. Write it and save first.`
             : `A run session measures at most ${MAX_SELECTED} searches. Clear one first.`,
         );
         return;
@@ -166,7 +174,7 @@ export default function SearchesPage() {
     [library, commit],
   );
 
-  if (!library || !draft) {
+  if (!library) {
     return (
       <div className={s.page}>
         <h1>Test searches</h1>
@@ -175,8 +183,8 @@ export default function SearchesPage() {
     );
   }
 
-  const advisories = searchWarnings(draft.text);
-  const dataset = deriveDataset(draft.text);
+  const advisories = draft ? searchWarnings(draft.text) : [];
+  const dataset = draft ? deriveDataset(draft.text) : '';
   const editingRuns = editing ? countRuns(runs, editing.id) : 0;
   const selectedCount = library.selectedIds.length;
 
@@ -211,8 +219,15 @@ export default function SearchesPage() {
             </button>
           </div>
 
+          {!library.searches.length && (
+            <p className={s.listEmpty}>
+              Nothing saved yet. <b>+ Add</b> creates an empty case for you to write.
+            </p>
+          )}
+
           {library.searches.map((entry) => {
             const chosen = isSelected(library, entry.id);
+            const runnable = isRunnable(entry);
             return (
               <div
                 key={entry.id}
@@ -223,15 +238,16 @@ export default function SearchesPage() {
                     type="checkbox"
                     checked={chosen}
                     onChange={() => toggle(entry.id)}
-                    disabled={!chosen && !canSelectMore(library)}
+                    disabled={!chosen && (!runnable || !canSelectMore(library))}
                     aria-label={`Include ${entry.name} in the next run session`}
                   />
                 </label>
                 <button className={s.listBody} onClick={() => openForEdit(entry.id)}>
                   <span className={s.listName}>{entry.name}</span>
                   <span className={s.listMeta}>
-                    {deriveDataset(entry.text) || 'no dataset term'} · {countRuns(runs, entry.id)} measured
-                    runs
+                    {runnable
+                      ? `${deriveDataset(entry.text) || 'no dataset term'} · ${countRuns(runs, entry.id)} measured runs`
+                      : 'empty draft — not runnable'}
                   </span>
                 </button>
               </div>
@@ -244,6 +260,28 @@ export default function SearchesPage() {
           </p>
         </aside>
 
+        {!draft && (
+          <section className={s.editor}>
+            <div className={s.firstRun}>
+              <h2>No test searches yet</h2>
+              <p>
+                This app ships with none on purpose. A benchmark has to measure <b>your</b> searches
+                against <b>your</b> data — a sample query that arrived in the box is the one most
+                likely to get run by accident and reported as a result.
+              </p>
+              <p className={s.muted}>
+                A test case is the complete KQL with its <code>dataset=</code> term and{' '}
+                <b>no time bounds</b>: the lab appends earliest/latest per window, which is the
+                variable the whole comparison varies.
+              </p>
+              <button className={s.save} onClick={add}>
+                Add your first search
+              </button>
+            </div>
+          </section>
+        )}
+
+        {draft && (
         <section className={s.editor}>
           <div className={s.editorHeader}>
             <div>
@@ -265,12 +303,6 @@ export default function SearchesPage() {
               <button
                 className={s.danger}
                 onClick={() => editing && setPendingDelete(editing)}
-                disabled={library.searches.length <= 1}
-                title={
-                  library.searches.length <= 1
-                    ? 'The last search cannot be deleted — the lab needs something to run.'
-                    : undefined
-                }
               >
                 Delete
               </button>
@@ -296,6 +328,7 @@ export default function SearchesPage() {
             rows={12}
             spellCheck={false}
             value={draft.text}
+            placeholder={SEARCH_PLACEHOLDER}
             onChange={(event) => setDraft({ ...draft, text: event.target.value })}
           />
           <span className={s.hint}>
@@ -344,6 +377,7 @@ export default function SearchesPage() {
             </button>
           </div>
         </section>
+        )}
       </div>
 
       {/*

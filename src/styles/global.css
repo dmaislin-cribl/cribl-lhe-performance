@@ -81,17 +81,29 @@
   --cds-transition-normal: 200ms ease;
 
   /* ---- Chart series ramp ----
-     Engine tiers are an ORDERED progression (Medium -> 2X-Large), not four
+     Engine tiers are an ORDERED progression (Nano -> 3X-Large), not four
      unrelated categories, so the series colors are a single-hue ordinal ramp
      that reads light -> dark with tier size. A categorical four-hue theme was
      tried first and failed validation: #eda100 vs #eb6834 sat at normal-vision
      dE 13.7, below the 15 floor.
-     Validated with the dataviz validator: `--ordinal`, mode light, surface
-     #ffffff — monotone lightness, dL gaps >= 0.06, light end 2.11:1, hue spread 4deg. */
+     Nine steps, one per testable Lakehouse engine size (Nano .. 3XLarge).
+     Re-stepped twice now — from four, then from seven — because adding sizes to a
+     ramp means re-spacing all of it, not appending. Lightness is spaced evenly and
+     chroma follows the previous ramp's curve, so the interior keeps its saturation
+     instead of washing out. Validated with the dataviz validator: `--ordinal`,
+     mode light, surface #ffffff — monotone lightness, dL gaps >= 0.06 (min 0.063),
+     light end 2.11:1, hue spread 4deg, ALL CHECKS PASS. The light end cannot go
+     paler than #86b6ef without dropping under the 2:1 floor, which is what sets
+     the range — a tenth step has to come out of the interior. */
   --chart-1: #86b6ef;
-  --chart-2: #3987e5;
-  --chart-3: #1c5cab;
-  --chart-4: #0d366b;
+  --chart-2: #6ba1e8;
+  --chart-3: #518cdf;
+  --chart-4: #3c78ce;
+  --chart-5: #2b65b6;
+  --chart-6: #1f5499;
+  --chart-7: #18437b;
+  --chart-8: #11335f;
+  --chart-9: #052445;
   /* Chart chrome: one step off the surface, recessive. */
   --chart-grid: #e8eaed;
   --chart-crosshair: #b9bcc2;
@@ -130,12 +142,19 @@
     --cds-color-primary: #2f9e44;
     --cds-color-primary-hover: #37b24d;
 
-    /* Validated: `--ordinal`, mode dark, surface #1a1a19 — light end 2.15:1,
-       hue spread 4deg, monotone lightness. */
+    /* Nine steps, its own selection from the same blue ramp — dark mode is chosen,
+       not an inversion of the light ramp. Validated: `--ordinal`, mode dark,
+       surface #1a1a19 — monotone lightness, dL gaps >= 0.06 (min 0.063), end
+       nearest the surface 2.15:1, hue spread 5deg, ALL CHECKS PASS. */
     --chart-1: #184f95;
-    --chart-2: #3987e5;
-    --chart-3: #86b6ef;
-    --chart-4: #cde2fb;
+    --chart-2: #1f62af;
+    --chart-3: #2a74c9;
+    --chart-4: #3987e5;
+    --chart-5: #589dea;
+    --chart-6: #7ab1ef;
+    --chart-7: #9cc5f3;
+    --chart-8: #bdd8f8;
+    --chart-9: #ddebfd;
     --chart-grid: #2f2f2d;
     --chart-crosshair: #55554f;
   }

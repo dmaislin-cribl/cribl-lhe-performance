@@ -1,0 +1,104 @@
+.page { max-width: 1600px; }
+.page h1 { font-size: 24px; line-height: 1.25; }
+.intro { color: var(--cds-color-fg-muted); margin: 8px 0 0; max-width: 860px; font-size: 13px; line-height: 1.6; }
+
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.back, .cta {
+  flex: none; border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  padding: 9px 13px; font-weight: 600; font-size: 13px;
+  background: var(--cds-color-bg); color: var(--cds-color-fg); text-decoration: none;
+}
+.cta { display: inline-block; margin-top: 12px; }
+
+.card {
+  background: var(--cds-color-bg); border: 1px solid var(--cds-color-border);
+  border-radius: var(--cds-radius-lg); padding: 18px; margin-bottom: 16px;
+}
+.cardHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.cardHeader h2 { font-size: 16px; margin: 0; }
+.muted { display: block; color: var(--cds-color-fg-muted); font-size: 12px; font-weight: 400; line-height: 1.55; }
+.cardHeader .muted { max-width: 760px; margin-top: 4px; }
+
+/* Filters: one row, above everything they scope. */
+.filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 14px; }
+.filters label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; color: var(--cds-color-fg-muted); }
+.filters select {
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg); color: var(--cds-color-fg); padding: 8px 10px; min-width: 200px;
+}
+
+/* The acceptance budget reads as a control panel, not as a result. */
+.budget {
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-lg);
+  background: var(--cds-color-bg-muted); padding: 14px 18px; margin-bottom: 16px;
+}
+.budgetFields { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; }
+.budgetFields label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; color: var(--cds-color-fg-muted); }
+.budgetFields select, .budgetFields input {
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg); color: var(--cds-color-fg); padding: 8px 10px; min-width: 210px;
+}
+.budgetNote { color: var(--cds-color-fg-muted); font-size: 12px; line-height: 1.6; margin: 10px 0 0; max-width: 820px; }
+
+.actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.actions button {
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  padding: 9px 13px; font-weight: 600; background: var(--cds-color-bg); color: var(--cds-color-fg);
+}
+
+/* Wide statistical tables scroll rather than wrap a percentile onto two lines. */
+.scroll { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th {
+  text-align: left; color: var(--cds-color-fg-muted); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
+  border-bottom: 1px solid var(--cds-color-border); padding: 9px 8px;
+}
+.table td {
+  border-bottom: 1px solid var(--cds-color-border-subtle); padding: 9px 8px;
+  vertical-align: top; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.table tr:last-child td { border-bottom: 0; }
+.strong { background: var(--cds-color-bg-muted); }
+.mono { font-variant-numeric: tabular-nums; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+.baselineTag {
+  margin-left: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--cds-color-fg-muted); border: 1px solid var(--cds-color-border);
+  border-radius: var(--cds-radius-sm); padding: 1px 5px;
+}
+.warnCell { color: var(--cds-color-warning); font-weight: 600; }
+
+/* Significance is a word first; the weight is secondary, never the only signal. */
+.yes { font-weight: 700; }
+.no { font-weight: 600; color: var(--cds-color-fg-muted); }
+
+.verdict {
+  display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; padding: 2px 7px; border-radius: var(--cds-radius-sm);
+  border: 1px solid var(--cds-color-border);
+}
+.verdict_pass { color: var(--cds-color-success); border-color: var(--cds-color-success); }
+.verdict_fail { color: var(--cds-color-danger); border-color: var(--cds-color-danger); }
+/* Untested is deliberately neutral — it is not a near-miss of a failure. */
+.verdict_unknown { color: var(--cds-color-fg-muted); }
+
+.note { color: var(--cds-color-fg-muted); font-size: 12px; margin: 12px 0 0; line-height: 1.6; }
+.clean { font-size: 13px; margin: 0; line-height: 1.6; }
+
+.healthGroup { margin-bottom: 14px; }
+.healthGroup:last-child { margin-bottom: 0; }
+.healthGroup h3 { font-size: 13px; margin: 0 0 6px; display: flex; align-items: center; }
+.healthGroup ul { margin: 0; padding-left: 18px; }
+.healthGroup li { font-size: 13px; line-height: 1.6; margin-bottom: 4px; }
+.warnNote { color: var(--cds-color-fg); }
+.warnNote b { color: var(--cds-color-warning); }
+.infoNote { color: var(--cds-color-fg-muted); }
+
+.empty {
+  color: var(--cds-color-fg-muted); padding: 32px; text-align: center;
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-lg);
+  margin-bottom: 16px;
+}
+.empty h2 { font-size: 16px; margin: 0 0 8px; color: var(--cds-color-fg); }
+.empty p { margin: 0 auto; max-width: 560px; font-size: 13px; line-height: 1.65; }

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  analysisToCsv,
+  analysisToMarkdown,
   comparisonToCsv,
   comparisonToMarkdown,
   csvCell,
@@ -8,9 +10,10 @@ import {
   toCsv,
   toMarkdown,
 } from './exportResults';
+import { analyzeByTier, type AnalysisScope } from './analysis';
 import { buildComparison } from './compare';
 import type { RunLog, RunRecord } from './appSettings';
-import { WINDOWS } from './windows';
+import { DEFAULT_WINDOWS } from './windows';
 
 function run(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -33,6 +36,8 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
     searchGroup: 'default_search',
     searchId: 's-1',
     searchName: 'Test search',
+    sessionId: 'run-1',
+    sessionName: 'Fixture session',
     ...overrides,
     // The comparison defaults to total time, so fixtures mirror engineMs into
     // totalMs: an assertion written against engineMs stays readable, and the
@@ -95,7 +100,7 @@ describe('runsToCsv', () => {
 
 describe('comparisonToCsv', () => {
   it('is long format: one row per window/tier pair', () => {
-    const rows = buildComparison([run()], WINDOWS.slice(0, 2), ['medium', 'large'], 'medium');
+    const rows = buildComparison([run()], DEFAULT_WINDOWS.slice(0, 2), ['medium', 'large'], 'medium');
     const lines = comparisonToCsv(rows, ['medium', 'large']).split('\r\n');
     expect(lines).toHaveLength(1 + 2 * 2);
     expect(lines[0]).toContain('speedup_vs_baseline');
@@ -105,7 +110,7 @@ describe('comparisonToCsv', () => {
 describe('comparisonToMarkdown', () => {
   it('reports the best speedup per window', () => {
     const runs = [run({ engine: 'medium', engineMs: 4000 }), run({ engine: 'large', engineMs: 1000 })];
-    const rows = buildComparison(runs, WINDOWS.slice(0, 1), ['medium', 'large'], 'medium');
+    const rows = buildComparison(runs, DEFAULT_WINDOWS.slice(0, 1), ['medium', 'large'], 'medium');
     const table = comparisonToMarkdown(rows, ['medium', 'large']);
     expect(table).toContain('4.00x');
     expect(table).toContain('| T1 |');
@@ -117,6 +122,7 @@ describe('provenanceBlock', () => {
     const log: RunLog = {
       runs: [run(), run({ measured: false }), run({ status: 'Error' })],
       queries: { abc: 'dataset="x"\n| summarize events = count()' },
+      sessions: [],
     };
     const block = provenanceBlock(log, { dataset: 'Fortinet_Syslog' });
     expect(block).toContain('# measured runs: 1');
@@ -125,5 +131,90 @@ describe('provenanceBlock', () => {
     expect(block).toContain('#   | summarize events = count()');
     // Every line stays commented so the block cannot be parsed as data.
     expect(block.split('\n').every((line) => line.startsWith('#'))).toBe(true);
+  });
+});
+
+/** A sweep's worth of runs: twelve on each of two sizes, the larger one faster. */
+function sweepRuns(): RunRecord[] {
+  const at = (engine: string, base: number) =>
+    Array.from({ length: 12 }, (_, index) =>
+      run({ id: `${engine}-${index}`, engine, totalMs: base + index * 10 }),
+    );
+  return [...at('medium', 2000), ...at('large', 800)];
+}
+
+const analysisScope: AnalysisScope = {
+  searchId: 's-1',
+  windowId: 'T1',
+  metric: 'total',
+  baseline: 'medium',
+  budgetMs: 1500,
+  budgetStatistic: 'p50',
+};
+
+describe('analysisToCsv', () => {
+  it('exports the qualifiers beside the numbers, not just the medians', () => {
+    const csv = analysisToCsv(analyzeByTier(sweepRuns(), analysisScope));
+    const [header] = csv.split('\r\n');
+    // A reviewer has to be able to re-derive the conclusion, which means the
+    // sample size, the outliers, the p-value and the test's own usability.
+    for (const column of [
+      'samples',
+      'outliers',
+      'counts_agree',
+      'mannwhitney_p',
+      'significance_usable',
+      'budget_verdict',
+    ]) {
+      expect(header).toContain(column);
+    }
+  });
+
+  it('gives one row per engine size, smallest first', () => {
+    const rows = analysisToCsv(analyzeByTier(sweepRuns(), analysisScope)).split('\r\n');
+    expect(rows).toHaveLength(3);
+    expect(rows[1].startsWith('medium,')).toBe(true);
+    expect(rows[2].startsWith('large,')).toBe(true);
+  });
+
+  it('leaves a statistic the sample cannot support empty rather than guessing', () => {
+    // Three runs support no p95 and no median interval.
+    const rows = analysisToCsv(analyzeByTier([
+      run({ id: 'a', totalMs: 100 }),
+      run({ id: 'b', totalMs: 200 }),
+      run({ id: 'c', totalMs: 300 }),
+    ], analysisScope));
+    const cells = rows.split('\r\n')[1].split(',');
+    const header = rows.split('\r\n')[0].split(',');
+    expect(cells[header.indexOf('p95_sec')]).toBe('');
+    expect(cells[header.indexOf('median_ci_low_sec')]).toBe('');
+    expect(cells[header.indexOf('p50_sec')]).toBe('0.200');
+  });
+
+  it('records the budget verdict per size', () => {
+    const csv = analysisToCsv(analyzeByTier(sweepRuns(), analysisScope));
+    const [header, medium, large] = csv.split('\r\n');
+    const column = header.split(',').indexOf('budget_verdict');
+    expect(medium.split(',')[column]).toBe('fail');
+    expect(large.split(',')[column]).toBe('pass');
+  });
+});
+
+describe('analysisToMarkdown', () => {
+  it('names the baseline in the comparison column and marks its own row', () => {
+    const table = analysisToMarkdown(analyzeByTier(sweepRuns(), analysisScope), 'medium');
+    expect(table).toContain('vs Medium');
+    expect(table).toContain('baseline');
+  });
+
+  it('reports significance with the p-value and the effect size together', () => {
+    const table = analysisToMarkdown(analyzeByTier(sweepRuns(), analysisScope), 'medium');
+    // A p-value alone says only that something moved; the band says whether it matters.
+    expect(table).toMatch(/yes \(p=0\.\d+, large\)/);
+  });
+
+  it('says a percentile is unsupported rather than printing the slowest run', () => {
+    const thin = analyzeByTier([run({ id: 'a', totalMs: 100 }), run({ id: 'b', totalMs: 900 })], analysisScope);
+    expect(analysisToMarkdown(thin, 'medium')).toContain('n too low');
   });
 });

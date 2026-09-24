@@ -1,0 +1,58 @@
+/* Prose, so the measure is capped rather than filling a 1400px panel: a line of
+   body text past ~90 characters is measurably harder to track back from. */
+.page { max-width: 820px; }
+.page h1 { font-size: 24px; line-height: 1.25; }
+.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+.back { white-space: nowrap; color: var(--cds-color-accent); font-weight: 600; font-size: 13px; }
+.intro { color: var(--cds-color-fg-muted); margin: 8px 0 18px; line-height: 1.65; }
+
+.toc {
+  display: flex; flex-wrap: wrap; gap: 6px 10px;
+  padding: 12px 14px; margin: 0 0 8px;
+  border: 1px solid var(--cds-color-border-subtle); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg-subtle);
+}
+.toc a { font-size: 12px; font-weight: 600; color: var(--cds-color-accent); }
+
+.block { margin: 26px 0; scroll-margin-top: 16px; }
+.block h2 {
+  font-size: 15px; margin: 0 0 10px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+}
+.block p, .block li, .block dd { font-size: 13px; line-height: 1.7; color: var(--cds-color-fg); }
+.block p { margin: 0 0 10px; }
+.block ul, .block ol { margin: 0 0 10px; padding-left: 20px; }
+.block li { margin-bottom: 7px; }
+.block code {
+  background: var(--cds-color-bg-muted); padding: 1px 5px;
+  border-radius: var(--cds-radius-sm); font-size: 12px;
+}
+
+/* Asides that qualify the main claim — recessive, but not so faint they read as
+   decoration, because several of them are the reason a number is trustworthy. */
+.note {
+  border-left: 2px solid var(--cds-color-border);
+  padding: 2px 0 2px 12px; color: var(--cds-color-fg-muted);
+}
+
+.table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+.table th, .table td {
+  padding: 6px 10px; text-align: left;
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+}
+.table th {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--cds-color-fg-muted); border-bottom-color: var(--cds-color-border);
+}
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table .num { text-align: right; }
+
+.faq { margin: 0; }
+.faq dt { font-size: 13px; font-weight: 600; margin-top: 12px; }
+.faq dd { margin: 3px 0 0; color: var(--cds-color-fg-muted); }
+
+.footer {
+  margin: 28px 0 0; padding-top: 14px; font-size: 12px; line-height: 1.7;
+  color: var(--cds-color-fg-muted); border-top: 1px solid var(--cds-color-border-subtle);
+}
+.footer code { background: var(--cds-color-bg-muted); padding: 1px 5px; border-radius: var(--cds-radius-sm); }

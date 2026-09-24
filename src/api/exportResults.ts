@@ -11,8 +11,10 @@
  */
 
 import type { ComparisonRow } from './compare';
+import type { SizeAnalysis } from './analysis';
 import type { RunRecord, RunLog } from './appSettings';
 import { formatSec } from './stats';
+import { labelTier } from './tiers';
 
 /** RFC 4180: quote when the value contains a comma, quote or newline; double inner quotes. */
 export function csvCell(value: unknown): string {
@@ -55,6 +57,7 @@ const RUN_HEADER = [
   'search_group',
   'query_hash',
   'search_name',
+  'session_name',
   'notes',
 ];
 
@@ -82,6 +85,7 @@ function runRow(run: RunRecord): unknown[] {
     run.searchGroup,
     run.queryHash,
     run.searchName,
+    run.sessionName,
     run.notes,
   ];
 }
@@ -155,6 +159,125 @@ export function comparisonToMarkdown(rows: ComparisonRow[], tiers: string[]): st
   return toMarkdown(header, body);
 }
 
+/** Milliseconds to seconds at 3 dp, or empty — the CSV convention used above. */
+function sec(ms: number | null | undefined): string {
+  return typeof ms === 'number' ? (ms / 1000).toFixed(3) : '';
+}
+
+/**
+ * Full statistical detail, one row per engine size.
+ *
+ * Every column a performance or QA reviewer needs to re-derive the conclusion
+ * themselves, including the ones that qualify it: sample size, the outlier count,
+ * whether the event counts agreed, and the significance test's own verdict on
+ * whether it had enough data. A table that exported only the medians would be
+ * asking to be trusted.
+ */
+export function analysisToCsv(rows: SizeAnalysis[]): string {
+  const header = [
+    'engine_tier',
+    'samples',
+    'errors',
+    'min_sec',
+    'p50_sec',
+    'p90_sec',
+    'p95_sec',
+    'p99_sec',
+    'max_sec',
+    'mean_sec',
+    'stdev_sec',
+    'cv_pct',
+    'iqr_sec',
+    'mad_sec',
+    'outliers',
+    'median_ci_low_sec',
+    'median_ci_high_sec',
+    'total_events',
+    'events_per_sec',
+    'counts_agree',
+    'shift_vs_baseline_sec',
+    'shift_vs_baseline_pct',
+    'cliffs_delta',
+    'effect_size',
+    'mannwhitney_p',
+    'significance_usable',
+    'budget_verdict',
+    'budget_headroom_sec',
+  ];
+  const body = rows.map((row) => [
+    row.tier,
+    row.summary.n,
+    row.errors,
+    sec(row.summary.min),
+    sec(row.summary.percentiles.p50),
+    sec(row.summary.percentiles.p90),
+    sec(row.summary.percentiles.p95),
+    sec(row.summary.percentiles.p99),
+    sec(row.summary.max),
+    sec(row.summary.mean),
+    sec(row.summary.stdev),
+    row.summary.cv === null ? '' : (row.summary.cv * 100).toFixed(1),
+    sec(row.summary.iqr),
+    sec(row.summary.mad),
+    row.summary.outliers,
+    sec(row.interval?.low),
+    sec(row.interval?.high),
+    row.eventCount ?? '',
+    row.throughput === null ? '' : row.throughput.toFixed(0),
+    row.countsAgree ? 'yes' : 'no',
+    sec(row.vsBaseline?.shiftMs),
+    row.vsBaseline?.percent === null || row.vsBaseline?.percent === undefined
+      ? ''
+      : row.vsBaseline.percent.toFixed(1),
+    row.vsBaseline?.delta === null || row.vsBaseline?.delta === undefined
+      ? ''
+      : row.vsBaseline.delta.toFixed(3),
+    row.vsBaseline?.effect ?? '',
+    row.vsBaseline?.test.p === null || row.vsBaseline?.test.p === undefined
+      ? ''
+      : row.vsBaseline.test.p.toFixed(5),
+    row.vsBaseline ? (row.vsBaseline.test.usable ? 'yes' : 'no') : '',
+    row.budget.verdict,
+    sec(row.budget.headroomMs),
+  ]);
+  return toCsv([header, ...body]);
+}
+
+/**
+ * The narrow version for a summary doc: the headline, the effect size and the
+ * qualifier, and nothing a reader has to be walked through.
+ */
+export function analysisToMarkdown(rows: SizeAnalysis[], baseline: string): string {
+  const header = ['Engine size', 'Runs', 'Median', 'p95', 'Variability', `vs ${labelTier(baseline)}`, 'Significant?'];
+  const body = rows.map((row) => {
+    const comparison = row.vsBaseline;
+    const change =
+      comparison?.percent === null || comparison?.percent === undefined
+        ? row.tier === baseline
+          ? 'baseline'
+          : '—'
+        : `${comparison.percent > 0 ? '+' : ''}${comparison.percent.toFixed(1)}%`;
+    return [
+      labelTier(row.tier),
+      row.summary.n,
+      `${formatSec(row.summary.percentiles.p50 ?? null)} s`,
+      row.summary.percentiles.p95 === null ? 'n too low' : `${formatSec(row.summary.percentiles.p95)} s`,
+      row.summary.cv === null ? '—' : `${(row.summary.cv * 100).toFixed(0)}%`,
+      change,
+      !comparison
+        ? row.tier === baseline
+          ? '—'
+          : 'not compared'
+        : !comparison.test.usable
+          ? 'too few runs'
+          : comparison.test.p !== null && comparison.test.p < 0.05
+            ? `yes (p=${comparison.test.p.toFixed(3)}, ${comparison.effect})`
+            : `no (p=${comparison.test.p?.toFixed(3) ?? '—'})`,
+    ];
+  });
+  return toMarkdown(header, body);
+}
+
 /**
  * A self-contained provenance header, so an exported table is interpretable
  * without the app. Without this, a pasted CSV is a set of numbers with no
@@ -162,11 +285,15 @@ export function comparisonToMarkdown(rows: ComparisonRow[], tiers: string[]): st
  */
 export function provenanceBlock(log: RunLog, extra: Record<string, string> = {}): string {
   const measured = log.runs.filter((run) => run.measured && run.status === 'Success');
+  // Which named sessions produced these numbers. A pasted table is otherwise
+  // unattributable to the run the operator actually means to talk about.
+  const sessions = [...new Set(log.runs.map((run) => run.sessionName).filter(Boolean))];
   const lines = [
     `# ${__APP_DISPLAY_NAME__} ${__APP_ID__} v${__APP_VERSION__}`,
     `# exported: ${new Date().toISOString()}`,
     `# measured runs: ${measured.length}`,
     `# timings are server-side: total = timeCompleted - timeCreated (queue + execution), engine = timeCompleted - timeStarted`,
+    ...(sessions.length ? [`# sessions: ${sessions.join(', ')}`] : []),
     ...Object.entries(extra).map(([key, value]) => `# ${key}: ${value}`),
   ];
   for (const [hash, query] of Object.entries(log.queries)) {

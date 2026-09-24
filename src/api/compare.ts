@@ -145,7 +145,12 @@ export function checkComparability(
   runs: RunRecord[],
   rows: ComparisonRow[],
   tiers: string[],
-  expectedPerWindow: number,
+  /**
+   * Timed runs the config expects for a given window. A function rather than one
+   * number because windows carry their own repetition counts — a single expected
+   * value would flag every deliberately-shortened window as a thin sample.
+   */
+  expectedFor: (windowId: string) => number,
 ): ComparabilityWarning[] {
   const warnings: ComparabilityWarning[] = [];
   const measured = runs.filter((run) => run.measured && run.status === 'Success');
@@ -176,11 +181,12 @@ export function checkComparability(
     });
   }
 
-  const partial = rows.flatMap((row) =>
-    tiers
-      .filter((tier) => row.cells[tier].stats.n > 0 && row.cells[tier].stats.n < expectedPerWindow)
-      .map((tier) => `${row.window.id}/${tier} (${row.cells[tier].stats.n}/${expectedPerWindow})`),
-  );
+  const partial = rows.flatMap((row) => {
+    const expected = expectedFor(row.window.id);
+    return tiers
+      .filter((tier) => row.cells[tier].stats.n > 0 && row.cells[tier].stats.n < expected)
+      .map((tier) => `${row.window.id}/${tier} (${row.cells[tier].stats.n}/${expected})`);
+  });
   if (partial.length) {
     warnings.push({
       kind: 'partial',

@@ -16,3 +16,52 @@
   background: var(--cds-color-primary); color: var(--cds-color-primary-fg);
 }
 .save:hover { background: var(--cds-color-primary-hover); }
+
+/* Window editor. A grid rather than a table so the header labels stay aligned
+   with the inputs at any column width, and so a row can wrap on a narrow panel
+   without the columns coming apart. */
+.windowTable { display: grid; gap: 4px; margin: 6px 0; }
+.windowHead, .windowRow {
+  display: grid;
+  grid-template-columns: 72px 72px 90px 150px 72px auto;
+  gap: 6px; align-items: center;
+}
+.windowHead > span {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--cds-color-fg-muted);
+}
+.windowId, .windowNum, .windowSel {
+  padding: 6px 8px; min-width: 0;
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg); color: var(--cds-color-fg);
+}
+.windowDrop {
+  justify-self: start; padding: 6px 10px; font-size: 12px;
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg); color: var(--cds-color-fg-muted);
+}
+.windowDrop:hover:not(:disabled) { color: var(--cds-color-fg); border-color: var(--cds-color-fg-muted); }
+.windowDrop:disabled { opacity: 0.45; }
+.addWindow {
+  padding: 7px 14px; font-size: 12px; font-weight: 600; margin: 4px 0 6px;
+  border: 1px solid var(--cds-color-border); border-radius: var(--cds-radius-md);
+  background: var(--cds-color-bg); color: var(--cds-color-fg);
+}
+.addWindow:disabled { opacity: 0.45; }
+
+/* Engine sizes. Two columns: nine sizes in one column is a lot of scrolling for
+   a list whose whole job is to be scanned. */
+.tierGrid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px; margin: 6px 0;
+}
+.tierItem {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 13px; font-weight: 400; color: var(--cds-color-fg);
+}
+.tierNote { color: var(--cds-color-fg-muted); font-size: 12px; }
+
+.inlineLabel {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 13px; font-weight: 400; color: var(--cds-color-fg); margin: 6px 0;
+}

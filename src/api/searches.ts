@@ -20,6 +20,13 @@
  * measure several cases against the same engine tier without the operator
  * babysitting the picker between matrices.
  *
+ * **The library ships empty.** There is no built-in sample search, and no
+ * fallback that invents one. A benchmark tool that arrives holding somebody
+ * else's query against somebody else's dataset is worse than an empty list: the
+ * default is the thing most likely to get run by accident and reported as a
+ * result. So every operation here tolerates zero searches and zero selected —
+ * the workbench disables its run buttons instead.
+ *
  * Deliberate non-goals:
  *
  *   - The library never edits the run log. Runs reference a query by content
@@ -60,24 +67,18 @@ export interface SavedSearch {
 
 export interface SearchLibrary {
   searches: SavedSearch[];
-  /** Searches this run session measures. Always 1..MAX_SELECTED live members. */
+  /**
+   * Searches this run session measures: 0..MAX_SELECTED live, runnable members.
+   * Zero is valid — see the module note on shipping empty.
+   */
   selectedIds: string[];
 }
 
-export const DEFAULT_DATASET = 'Fortinet_Syslog';
+/** Shown in the empty editor. Guidance, not content — it is never saved or run. */
+export const SEARCH_PLACEHOLDER = 'dataset="your_dataset"\n| summarize events = count()';
 
-export const DEFAULT_SEARCH_TEXT =
-  `dataset="${DEFAULT_DATASET}"\n` +
-  '| where hostname has "baidu" or hostname has "qq" or hostname has "aliyuncs"\n' +
-  '   or hostname has "yixinfa" or hostname has "pingxiaobao"\n' +
-  '   or hostname has "tougeping" or hostname has "eselltech"\n' +
-  '| summarize events = count() by hostname\n' +
-  '| sort by events desc';
-
-export const DEFAULT_SEARCH_NAME = 'Seven-term hostname scan';
-
-/** Starting point for a new case: runnable as-is, so it can be measured before it is edited. */
-export const NEW_SEARCH_TEXT = `dataset="${DEFAULT_DATASET}"\n| summarize events = count()`;
+/** The empty library. A workspace starts here and the operator fills it. */
+export const EMPTY_LIBRARY: SearchLibrary = { searches: [], selectedIds: [] };
 
 /**
  * Ids must survive a rename, so they are not derived from the name. Random
@@ -110,7 +111,8 @@ export function makeSearch(
   return {
     id: newSearchId(nowMs),
     name: fields.name ?? 'New search',
-    text: fields.text ?? NEW_SEARCH_TEXT,
+    // Empty, not a sample: a prefilled query is one that gets run unread.
+    text: fields.text ?? '',
     notes: fields.notes ?? '',
     createdAt: now,
     updatedAt: now,
@@ -127,9 +129,11 @@ function asString(value: unknown, fallback: string): string {
  * Also migrates the earlier `{ dataset, query }` shape by stitching the two into
  * one `text`, so a library written by a previous build is not silently dropped.
  *
- * A library with no searches, or a selection pointing at deleted ones, would
- * leave the workbench with nothing to run and no way to recover through the UI,
- * so both are repaired here rather than defended against at every read site.
+ * An empty library is a valid state and is returned as-is. A search with empty
+ * text is kept too — that is a case the operator added and has not written yet,
+ * and dropping it on reload would lose the name and notes they had typed. What
+ * empty text does forfeit is the ability to be selected for a run; see
+ * `isRunnable`.
  */
 export function normalizeLibrary(stored: Partial<SearchLibrary> | null): SearchLibrary {
   const raw = Array.isArray(stored?.searches) ? stored.searches : [];
@@ -139,8 +143,6 @@ export function normalizeLibrary(stored: Partial<SearchLibrary> | null): SearchL
     if (!entry || typeof entry !== 'object') continue;
     const candidate = entry as Partial<SavedSearch> & { dataset?: unknown; query?: unknown };
     const text = textOf(candidate);
-    // A search with no logic cannot be measured; dropping it beats offering it.
-    if (!text.trim()) continue;
     const id = asString(candidate.id, newSearchId());
     if (seen.has(id)) continue;
     seen.add(id);
@@ -156,17 +158,20 @@ export function normalizeLibrary(stored: Partial<SearchLibrary> | null): SearchL
     if (searches.length >= MAX_SEARCHES) break;
   }
 
-  if (!searches.length) {
-    searches.push(makeSearch({ name: DEFAULT_SEARCH_NAME, text: DEFAULT_SEARCH_TEXT }));
-  }
-
-  const live = new Set(searches.map((entry) => entry.id));
+  // Only runnable searches can be selected, so a stale selection cannot make the
+  // run button look armed when the case behind it is still blank.
+  const live = new Set(searches.filter(isRunnable).map((entry) => entry.id));
   const selectedIds = (Array.isArray(stored?.selectedIds) ? stored.selectedIds : [])
     .filter((id): id is string => typeof id === 'string' && live.has(id))
     .filter((id, index, all) => all.indexOf(id) === index)
     .slice(0, MAX_SELECTED);
 
-  return { searches, selectedIds: selectedIds.length ? selectedIds : [searches[0].id] };
+  return { searches, selectedIds };
+}
+
+/** A search with logic in it. Empty ones are drafts: editable, not measurable. */
+export function isRunnable(search: Pick<SavedSearch, 'text'>): boolean {
+  return search.text.trim().length > 0;
 }
 
 /** One search's text, whether stored as `text` or the older dataset+query pair. */
@@ -174,26 +179,36 @@ function textOf(candidate: { text?: unknown; dataset?: unknown; query?: unknown 
   if (typeof candidate.text === 'string' && candidate.text.trim()) return candidate.text;
   const query = typeof candidate.query === 'string' ? candidate.query.trim() : '';
   if (!query) return '';
-  const dataset = typeof candidate.dataset === 'string' && candidate.dataset ? candidate.dataset : DEFAULT_DATASET;
-  return /^\s*dataset\s*=/i.test(query) ? query : `dataset="${dataset}"\n| ${query}`;
+  if (/^\s*dataset\s*=/i.test(query)) return query;
+  // No dataset term and nothing trustworthy to supply one: hand back the logic
+  // unchanged rather than inventing a dataset the operator never named.
+  const dataset = typeof candidate.dataset === 'string' && candidate.dataset.trim() ? candidate.dataset.trim() : '';
+  return dataset ? `dataset="${dataset}"\n| ${query}` : query;
 }
 
-/** The library a workspace starts with: one runnable case, not an empty list. */
+/**
+ * Carry a pre-library install's single query into the library, or return the
+ * empty library. This is a migration of the operator's **own** query, not a
+ * shipped default — when there is nothing stored, nothing is created.
+ */
 export function seedLibrary(
   legacy: { query?: string; dataset?: string } | null,
   nowMs = Date.now(),
 ): SearchLibrary {
-  const text = textOf({ query: legacy?.query, dataset: legacy?.dataset }) || DEFAULT_SEARCH_TEXT;
-  // A migrated query keeps the default name: it *is* the search the lab ran.
-  const search = makeSearch({ name: DEFAULT_SEARCH_NAME, text }, nowMs);
+  const text = textOf({ query: legacy?.query, dataset: legacy?.dataset });
+  if (!text.trim()) return EMPTY_LIBRARY;
+  const search = makeSearch({ name: 'Imported search', text }, nowMs);
   return { searches: [search], selectedIds: [search.id] };
 }
 
-/** Selected searches in library order, so run order matches what the list shows. */
+/**
+ * Selected searches in library order, so run order matches what the list shows.
+ * Empty when nothing is selected — the caller disables its run buttons rather
+ * than being handed an arbitrary search to measure.
+ */
 export function selectedSearches(library: SearchLibrary): SavedSearch[] {
   const chosen = new Set(library.selectedIds);
-  const hits = library.searches.filter((entry) => chosen.has(entry.id));
-  return hits.length ? hits : library.searches.slice(0, 1);
+  return library.searches.filter((entry) => chosen.has(entry.id) && isRunnable(entry));
 }
 
 export function isSelected(library: SearchLibrary, id: string): boolean {
@@ -205,23 +220,25 @@ export function canSelectMore(library: SearchLibrary): boolean {
 }
 
 /**
- * Add or remove a search from the run selection. Refuses to empty the selection
- * or to exceed the cap — both would need an error path in every caller, and
- * neither is a state the UI should be able to reach.
+ * Add or remove a search from the run selection. Deselecting everything is
+ * allowed — the operator is entitled to an armed-at-nothing lab, and the run
+ * buttons go disabled. Returns the library unchanged when the cap is reached or
+ * the search has no logic to run, so the caller can say why.
  */
 export function toggleSelected(library: SearchLibrary, id: string): SearchLibrary {
-  if (!library.searches.some((entry) => entry.id === id)) return library;
+  const target = library.searches.find((entry) => entry.id === id);
+  if (!target) return library;
   if (library.selectedIds.includes(id)) {
-    if (library.selectedIds.length <= 1) return library;
     return { ...library, selectedIds: library.selectedIds.filter((entry) => entry !== id) };
   }
-  if (!canSelectMore(library)) return library;
+  if (!isRunnable(target) || !canSelectMore(library)) return library;
   return { ...library, selectedIds: [...library.selectedIds, id] };
 }
 
 /** Replace the whole selection, e.g. "run only this one". */
 export function selectOnly(library: SearchLibrary, id: string): SearchLibrary {
-  if (!library.searches.some((entry) => entry.id === id)) return library;
+  const target = library.searches.find((entry) => entry.id === id);
+  if (!target || !isRunnable(target)) return library;
   return { ...library, selectedIds: [id] };
 }
 
@@ -244,18 +261,16 @@ export function upsertSearch(
 }
 
 /**
- * Remove a search. The last one is never removed — an empty library leaves the
- * workbench unable to run anything, and the UI could not add one back without a
- * search to copy the shape from.
+ * Remove a search. Any search, including the last one — the library is the
+ * operator's, and emptying it is a legitimate way to start over. Deselecting is
+ * all that follows; nothing is substituted in its place.
  */
 export function deleteSearch(library: SearchLibrary, id: string): SearchLibrary {
-  if (library.searches.length <= 1) return library;
-  const index = library.searches.findIndex((entry) => entry.id === id);
-  if (index === -1) return library;
-  const searches = library.searches.filter((entry) => entry.id !== id);
-  const kept = library.selectedIds.filter((entry) => entry !== id);
-  const selectedIds = kept.length ? kept : [searches[Math.min(index, searches.length - 1)].id];
-  return { searches, selectedIds };
+  if (!library.searches.some((entry) => entry.id === id)) return library;
+  return {
+    searches: library.searches.filter((entry) => entry.id !== id),
+    selectedIds: library.selectedIds.filter((entry) => entry !== id),
+  };
 }
 
 /** Copy, so a variant can be measured without editing a case already run. */
@@ -337,11 +352,12 @@ export function searchWarnings(text: string): string[] {
  */
 export async function loadLibrary(): Promise<SearchLibrary> {
   const stored = await kvGet<Partial<SearchLibrary>>(SEARCHES_KEY);
-  if (stored?.searches?.length) return normalizeLibrary(stored);
+  if (stored?.searches) return normalizeLibrary(stored);
   const legacy = await kvGet<{ query?: string; dataset?: string }>(CONFIG_KEY);
   const seeded = seedLibrary(legacy);
-  // Persist immediately so the migrated id is stable across reloads; a run
-  // recorded against a per-session id could not be traced back to a search.
+  if (!seeded.searches.length) return seeded;
+  // Persist a migrated search immediately so its id is stable across reloads; a
+  // run recorded against a per-session id could not be traced back to a search.
   try {
     await saveLibrary(seeded);
   } catch {

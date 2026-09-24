@@ -9,6 +9,13 @@
 .cardHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .cardHeader h2 { font-size: 16px; margin: 0; }
 .muted { display: block; color: var(--cds-color-fg-muted); font-size: 12px; }
+/* Says which sizes the chart left out. A dropped series has to be stated, or the
+   chart reads as the whole comparison when it is a subset of it. */
+.chartNote {
+  background: var(--cds-color-bg-muted); border-radius: var(--cds-radius-md);
+  padding: 8px 11px; font-size: 12px; line-height: 1.55; margin: 0 0 12px;
+  color: var(--cds-color-fg-muted);
+}
 
 /* Filters: one row, above everything they scope. */
 .filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 16px; }

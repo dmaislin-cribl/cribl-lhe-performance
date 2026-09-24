@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import LatencyChart, { type ChartSeries } from '../components/LatencyChart';
 import StatusBanner from '../components/StatusBanner';
 import { buildComparison, checkComparability, searchesInLog, tiersWithData } from '../api/compare';
@@ -17,6 +18,7 @@ import {
   EMPTY_RUN_LOG,
   loadConfig,
   loadRunLog,
+  repetitionsFor,
   type LabConfig,
   type RunLog,
 } from '../api/appSettings';
@@ -28,8 +30,16 @@ import {
   runsToCsv,
 } from '../api/exportResults';
 import { P95_MIN_SAMPLES, formatSec } from '../api/stats';
-import { BASELINE_TIER, ENGINE_TIERS, labelTier, tierColor } from '../api/tiers';
-import { WINDOWS } from '../api/windows';
+import {
+  BASELINE_TIER,
+  ENGINE_TIERS,
+  MAX_CHARTED_TIERS,
+  labelTier,
+  tierColor,
+  tierIndex,
+} from '../api/tiers';
+import { summarizeSessions } from '../api/sessions';
+
 import s from './ComparePage.module.css';
 
 /**
@@ -41,6 +51,8 @@ type Metric = 'total' | 'engine' | 'msPerHour';
 
 /** Sentinel for "do not filter by search" — a real id can never be empty. */
 const ALL_SEARCHES = '';
+/** Same trick for sessions. */
+const ALL_SESSIONS = '';
 
 /** Says what is wrong, not which enum member it is. */
 const WARNING_TITLES: Record<string, string> = {
@@ -78,6 +90,14 @@ export default function ComparePage() {
   const [metric, setMetric] = useState<Metric>('total');
   const [baseline, setBaseline] = useState(BASELINE_TIER);
   const [searchId, setSearchId] = useState<string | null>(null);
+  /**
+   * `?session=<id>` preselects one session, so a session card can link straight
+   * here instead of asking the reader to find the right row in the dropdown from
+   * memory. Read once as the initial value rather than tracked: changing the
+   * dropdown afterwards must not be fighting the URL.
+   */
+  const [params] = useSearchParams();
+  const [sessionId, setSessionId] = useState(params.get('session') ?? ALL_SESSIONS);
   const [copied, setCopied] = useState('');
 
   useEffect(() => {
@@ -85,7 +105,23 @@ export default function ComparePage() {
     void loadConfig().then(setConfig);
   }, []);
 
-  const searches = useMemo(() => searchesInLog(log.runs), [log.runs]);
+  /**
+   * Sessions with runs still in the log. Filtering by session is how an operator
+   * compares one named benchmark rather than every measurement ever taken in this
+   * workspace — the whole reason sessions are named.
+   */
+  const sessionOptions = useMemo(
+    () => summarizeSessions(log).filter((entry) => entry.totalRuns > 0),
+    [log],
+  );
+
+  /** Session filter first: the search list should describe what is in scope. */
+  const inSession = useMemo(
+    () => (sessionId === ALL_SESSIONS ? log.runs : log.runs.filter((run) => run.sessionId === sessionId)),
+    [log.runs, sessionId],
+  );
+
+  const searches = useMemo(() => searchesInLog(inSession), [inSession]);
 
   /**
    * Default to the most-measured search rather than to everything. Mixing two
@@ -97,9 +133,9 @@ export default function ComparePage() {
   const scoped = useMemo(
     () =>
       activeSearchId === ALL_SEARCHES
-        ? log.runs
-        : log.runs.filter((run) => (run.searchId || '(unattributed)') === activeSearchId),
-    [log.runs, activeSearchId],
+        ? inSession
+        : inSession.filter((run) => (run.searchId || '(unattributed)') === activeSearchId),
+    [inSession, activeSearchId],
   );
 
   /** Engine time and total time are different columns of the same run. */
@@ -113,18 +149,31 @@ export default function ComparePage() {
   }, [scoped, baseline, field]);
 
   const rows = useMemo(
-    () => buildComparison(scoped, WINDOWS, tiers, baseline, field),
-    [scoped, tiers, baseline, field],
+    () => buildComparison(scoped, config.windows, tiers, baseline, field),
+    [scoped, config.windows, tiers, baseline, field],
   );
 
   const warnings = useMemo(
-    () => checkComparability(scoped, rows, tiers, config.repetitions),
-    [scoped, rows, tiers, config.repetitions],
+    () => checkComparability(scoped, rows, tiers, (id) => repetitionsFor(config, id)),
+    [scoped, rows, tiers, config],
   );
+
+  /**
+   * Seven single-hue steps plotted at once are genuinely unreadable, and the fix
+   * is fewer series rather than more hues. Chart the baseline plus the largest
+   * sizes — the interesting end of the ramp — and leave the full set to the table
+   * below, which loses nothing.
+   */
+  const chartedTiers = useMemo(() => {
+    if (tiers.length <= MAX_CHARTED_TIERS) return tiers;
+    const rest = tiers.filter((tier) => tier !== baseline).sort((a, b) => tierIndex(b) - tierIndex(a));
+    const keep = new Set([baseline, ...rest.slice(0, MAX_CHARTED_TIERS - 1)]);
+    return tiers.filter((tier) => keep.has(tier));
+  }, [tiers, baseline]);
 
   const series: ChartSeries[] = useMemo(
     () =>
-      tiers.map((tier) => ({
+      chartedTiers.map((tier) => ({
         key: tier,
         label: labelTier(tier),
         color: tierColor(tier),
@@ -134,7 +183,7 @@ export default function ComparePage() {
           return cell.stats.median === null ? null : cell.stats.median / 1000;
         }),
       })),
-    [rows, tiers, metric],
+    [rows, chartedTiers, metric],
   );
 
   const copy = async (what: string, text: string) => {
@@ -143,9 +192,21 @@ export default function ComparePage() {
     window.setTimeout(() => setCopied(''), 4000);
   };
 
+  /**
+   * The dataset the shown numbers were measured against, read off the runs
+   * themselves rather than from config. There is no single configured dataset any
+   * more — each saved search names its own — so the honest answer is the distinct
+   * set in scope, and "mixed" is a finding the reader should see, not hide.
+   */
+  const scopedDatasets = useMemo(() => {
+    const seen = [...new Set(scoped.map((run) => run.dataset).filter(Boolean))];
+    return seen.length ? seen.join(', ') : 'unknown';
+  }, [scoped]);
+
   const provenance = () =>
     provenanceBlock(log, {
-      dataset: config.dataset,
+      session: sessionOptions.find((entry) => entry.id === sessionId)?.name ?? 'all sessions',
+      dataset: scopedDatasets,
       'search group': config.searchGroup,
       'cache state (operator annotation)': config.cacheState,
       search: searches.find((entry) => entry.id === activeSearchId)?.name ?? 'all searches (mixed)',
@@ -180,6 +241,29 @@ export default function ComparePage() {
       ))}
 
       <div className={s.filters}>
+        <div>
+          <label htmlFor="session">Session</label>
+          <select
+            id="session"
+            value={sessionId}
+            onChange={(event) => {
+              setSessionId(event.target.value);
+              // The search in scope may not exist in the new session, so fall back
+              // to that session's most-measured one rather than showing nothing.
+              setSearchId(null);
+            }}
+            disabled={!sessionOptions.length}
+          >
+            <option value={ALL_SESSIONS}>
+              {sessionOptions.length ? 'All sessions' : 'No named sessions yet'}
+            </option>
+            {sessionOptions.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name} · {labelTier(entry.tier)} ({entry.measuredRuns} timed)
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label htmlFor="search">Search</label>
           <select
@@ -226,8 +310,8 @@ export default function ComparePage() {
           >
             Copy Markdown
           </button>
-          <button onClick={() => void copy('Raw run CSV', `${provenance()}\n${runsToCsv(log.runs)}`)}>
-            Copy raw runs ({log.runs.length})
+          <button onClick={() => void copy('Raw run CSV', `${provenance()}\n${runsToCsv(scoped)}`)}>
+            Copy raw runs ({scoped.length})
           </button>
         </div>
       </div>
@@ -239,15 +323,23 @@ export default function ComparePage() {
             <span className={s.muted}>{METRIC_NOTES[metric]}</span>
           </div>
         </div>
+        {chartedTiers.length < tiers.length && (
+          <p className={s.chartNote}>
+            Plotting {chartedTiers.length} of {tiers.length} engine sizes —{' '}
+            {chartedTiers.map(labelTier).join(', ')}. The baseline and the largest sizes are the
+            readable comparison; more than {MAX_CHARTED_TIERS} steps of one hue cannot be told apart.
+            The table below and every export carry all {tiers.length}.
+          </p>
+        )}
         <LatencyChart
-          xLabels={WINDOWS.map((window) => window.id)}
-          xSubLabels={WINDOWS.map((window) => window.label)}
+          xLabels={config.windows.map((window) => window.id)}
+          xSubLabels={config.windows.map((window) => window.label)}
           series={series}
           yAxisTitle={metric === 'msPerHour' ? 'ms per hour scanned' : 'seconds'}
           format={metric === 'msPerHour' ? formatMsPerHour : formatSeconds}
-          ariaLabel={`${METRIC_LABELS[metric]} by time window for ${tiers
+          ariaLabel={`${METRIC_LABELS[metric]} by time window for ${chartedTiers
             .map(labelTier)
-            .join(', ')}. The full values are in the table below.`}
+            .join(', ')}. The full values, for all ${tiers.length} engine sizes, are in the table below.`}
         />
       </section>
 

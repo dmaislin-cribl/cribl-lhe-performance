@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_SEARCH_NAME,
+  EMPTY_LIBRARY,
   MAX_SELECTED,
   canSelectMore,
+  isRunnable,
   deleteSearch,
   deriveDataset,
   duplicateSearch,
@@ -45,22 +46,24 @@ describe('deriveDataset', () => {
 });
 
 describe('normalizeLibrary', () => {
-  it('produces a runnable library from nothing', () => {
+  it('returns the empty library from nothing, inventing no sample search', () => {
     const normalized = normalizeLibrary(null);
-    expect(normalized.searches).toHaveLength(1);
-    expect(normalized.selectedIds).toEqual([normalized.searches[0].id]);
+    expect(normalized.searches).toEqual([]);
+    expect(normalized.selectedIds).toEqual([]);
   });
 
-  it('drops entries with no logic instead of offering an unrunnable case', () => {
+  it('keeps a blank draft but refuses to leave it selected', () => {
     const normalized = normalizeLibrary({
       searches: [
-        { ...makeSearch({ text: '   ' }), id: 'blank' },
+        { ...makeSearch({ name: 'Draft', text: '   ' }), id: 'blank' },
         { ...makeSearch({ text: 'dataset="d" | count' }), id: 'ok' },
       ],
-      selectedIds: ['blank'],
+      selectedIds: ['blank', 'ok'],
     });
-    expect(normalized.searches.map((entry) => entry.id)).toEqual(['ok']);
-    // The selection pointed at the dropped entry, so it is repaired.
+    // The draft survives the reload — its name and notes were the operator's work.
+    expect(normalized.searches.map((entry) => entry.id)).toEqual(['blank', 'ok']);
+    expect(isRunnable(normalized.searches[0])).toBe(false);
+    // But it cannot arm the run button, so only the runnable one stays selected.
     expect(normalized.selectedIds).toEqual(['ok']);
   });
 
@@ -82,9 +85,8 @@ describe('normalizeLibrary', () => {
 });
 
 describe('seedLibrary', () => {
-  it('carries a legacy single query over under the default name', () => {
+  it("carries a legacy single query over as the operator's own import", () => {
     const seeded = seedLibrary({ query: 'where host == "a"', dataset: 'Other' });
-    expect(seeded.searches[0].name).toBe(DEFAULT_SEARCH_NAME);
     expect(seeded.searches[0].text).toBe('dataset="Other"\n| where host == "a"');
     expect(seeded.selectedIds).toHaveLength(1);
   });
@@ -94,8 +96,14 @@ describe('seedLibrary', () => {
     expect(seeded.searches[0].text).toBe('dataset="X" | count');
   });
 
-  it('falls back to the built-in search when there is nothing to migrate', () => {
-    expect(seedLibrary(null).searches[0].text).toContain('dataset=');
+  it('creates nothing when there is nothing to migrate', () => {
+    // The whole point of shipping empty: no default query can be run by accident.
+    expect(seedLibrary(null)).toEqual(EMPTY_LIBRARY);
+    expect(seedLibrary({ query: '   ' }).searches).toEqual([]);
+  });
+
+  it('keeps the logic rather than inventing a dataset the operator never named', () => {
+    expect(seedLibrary({ query: 'where host == "a"' }).searches[0].text).toBe('where host == "a"');
   });
 });
 
@@ -110,9 +118,17 @@ describe('run selection', () => {
     expect(toggleSelected(lib, 'id3')).toBe(lib);
   });
 
-  it('never empties the selection', () => {
-    const lib = library();
-    expect(toggleSelected(lib, 'id0')).toBe(lib);
+  it('allows emptying the selection — an armed-at-nothing lab is legitimate', () => {
+    const lib = toggleSelected(library(), 'id0');
+    expect(lib.selectedIds).toEqual([]);
+  });
+
+  it('refuses to select a search with no logic in it', () => {
+    const base = library(1);
+    const blank = { ...makeSearch({ name: 'Draft', text: '' }), id: 'blank' };
+    const lib: SearchLibrary = { searches: [...base.searches, blank], selectedIds: [] };
+    expect(toggleSelected(lib, 'blank')).toBe(lib);
+    expect(selectOnly(lib, 'blank')).toBe(lib);
   });
 
   it('removes a selected member when others remain', () => {
@@ -161,15 +177,23 @@ describe('upsertSearch', () => {
 });
 
 describe('deleteSearch', () => {
-  it('refuses to remove the last search', () => {
-    const lib = library(1);
-    expect(deleteSearch(lib, lib.searches[0].id)).toBe(lib);
+  it('will empty the library, since starting over is the operator\'s call', () => {
+    const lib = deleteSearch(library(1), 'id0');
+    expect(lib.searches).toEqual([]);
+    expect(lib.selectedIds).toEqual([]);
   });
 
-  it('reassigns the selection when the deleted search was selected', () => {
+  it('ignores an id that is not in the library', () => {
+    const lib = library(1);
+    expect(deleteSearch(lib, 'nope')).toBe(lib);
+  });
+
+  it('deselects the deleted search without substituting another', () => {
     const lib = deleteSearch(library(3), 'id0');
     expect(lib.searches.map((entry) => entry.id)).toEqual(['id1', 'id2']);
-    expect(lib.selectedIds).toEqual(['id1']);
+    // Nothing is promoted in its place: silently arming a different search is how
+    // an operator ends up measuring a case they did not choose.
+    expect(lib.selectedIds).toEqual([]);
   });
 
   it('leaves an unrelated selection alone', () => {

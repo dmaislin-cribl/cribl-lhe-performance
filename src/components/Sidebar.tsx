@@ -21,10 +21,28 @@ const items: NavItem[] = [
     icon: <svg {...ICON_PROPS}><circle cx="11" cy="11" r="7" /><line x1="16.5" y1="16.5" x2="21" y2="21" /></svg>,
   },
   {
+    label: 'Sessions', to: '/sessions',
+    icon: <svg {...ICON_PROPS}><path d="M4 5h16" /><path d="M4 12h16" /><path d="M4 19h10" /><circle cx="18.5" cy="19" r="2.5" /></svg>,
+  },
+  {
     label: 'Compare tiers', to: '/compare',
     icon: <svg {...ICON_PROPS}><polyline points="3 17 9 11 13 15 21 7" /><polyline points="15 7 21 7 21 13" /></svg>,
   },
+  {
+    // A box plot: the analysis view is the distribution, not the trend.
+    label: 'Analysis', to: '/analysis',
+    icon: <svg {...ICON_PROPS}><rect x="4" y="9" width="6" height="7" /><line x1="7" y1="4" x2="7" y2="9" /><line x1="7" y1="16" x2="7" y2="21" /><rect x="14" y="6" width="6" height="9" /><line x1="17" y1="3" x2="17" y2="6" /><line x1="17" y1="15" x2="17" y2="20" /></svg>,
+  },
 ];
+
+/**
+ * Below the divider with Settings, not in the main list: these are the things you
+ * reach for while working, not steps in the workflow the list above describes.
+ */
+const docsItem: NavItem = {
+  label: 'Documentation', to: '/docs',
+  icon: <svg {...ICON_PROPS}><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H4z" /><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h6z" /></svg>,
+};
 
 const settingsItem: NavItem = {
   label: 'Settings', to: '/settings',
@@ -59,6 +77,7 @@ export default function Sidebar() {
 
       <div className={s.divider} />
       <div className={s.section}>
+        <SidebarItem item={docsItem} collapsed={collapsed} />
         <SidebarItem item={settingsItem} collapsed={collapsed} />
       </div>
 

@@ -34,6 +34,11 @@
 }
 .listName { display: block; font-weight: 600; font-size: 13px; }
 .listMeta { display: block; color: var(--cds-color-fg-muted); font-size: 11px; margin-top: 2px; }
+.listEmpty {
+  color: var(--cds-color-fg-muted); font-size: 12px; padding: 14px 6px;
+  line-height: 1.55; text-align: center;
+}
+
 .listNote { color: var(--cds-color-fg-muted); font-size: 11px; padding: 10px 6px 2px; line-height: 1.5; }
 
 .editor {
@@ -77,6 +82,15 @@
 }
 .save { border: 0 !important; background: var(--cds-color-primary) !important; color: var(--cds-color-primary-fg) !important; }
 .save:disabled { opacity: .55; }
+
+/* First-run state. Takes the editor's place rather than sitting beside an empty
+   form, so the one action on screen is the one there is to take. */
+.firstRun { max-width: 58ch; padding: 10px 0; }
+.firstRun h2 { font-size: 16px; margin: 0 0 10px; }
+.firstRun p { font-size: 13px; line-height: 1.6; margin: 0 0 12px; }
+.firstRun .muted { font-size: 12px; }
+.firstRun code { background: var(--cds-color-bg-muted); padding: 1px 4px; border-radius: var(--cds-radius-sm); }
+.firstRun button { padding: 9px 14px; border-radius: var(--cds-radius-md); font-weight: 600; }
 
 .modalScrim {
   position: fixed; inset: 0; background: rgb(0 0 0 / .45);
