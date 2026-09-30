@@ -20,7 +20,7 @@
     "test:e2e": "npx playwright test"
   },
   "dependencies": {
-    "@capra/core": "^1.15.0",
+    "@capra/core": "^1.16.0",
     "@criblio/app-utils": "^0.8.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
