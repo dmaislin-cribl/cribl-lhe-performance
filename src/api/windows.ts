@@ -21,6 +21,7 @@
  * numbers back unchanged.
  */
 
+export type SpanUnit = 'hour' | 'day' | 'week' | 'month';
 export type SnapUnit = 'hour' | 'day';
 
 export interface WindowDef {
@@ -33,7 +34,7 @@ export interface WindowDef {
   id: string;
   /** Human label for the span, e.g. "4 hours". Derived; see `makeWindow`. */
   label: string;
-  /** Width of the window in milliseconds. Derived from count × unit. */
+  /** Nominal width in milliseconds for ordering; calendar months resolve to their actual width. */
   spanMs: number;
   /**
    * The span as the operator entered it. Stored rather than inferred from
@@ -41,7 +42,7 @@ export interface WindowDef {
    * intent — the default set deliberately has a 24-hour window and no 1-day one.
    */
   spanCount: number;
-  spanUnit: SnapUnit;
+  spanUnit: SpanUnit;
   /**
    * Boundary the window's end is snapped to. The end is the most recent
    * completed unit — one full hour/day back — so the window never includes
@@ -62,14 +63,26 @@ export interface ResolvedWindow extends WindowDef {
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
+const MONTH_MS = 30 * DAY_MS;
 
 /** Largest span the editor accepts, in either unit. */
 export const MAX_SPAN_COUNT = 400;
 /** Windows an operator may define at once. */
-export const MAX_WINDOWS = 20;
+export const MAX_WINDOWS = 50;
 
-export function unitMs(unit: SnapUnit): number {
-  return unit === 'hour' ? HOUR_MS : DAY_MS;
+export function unitMs(unit: SpanUnit): number {
+  switch (unit) {
+    case 'hour':
+      return HOUR_MS;
+    case 'day':
+      return DAY_MS;
+    case 'week':
+      return WEEK_MS;
+    case 'month':
+      // Used only as a stable nominal width for ordering configured windows.
+      return MONTH_MS;
+  }
 }
 
 /**
@@ -83,7 +96,7 @@ export function unitMs(unit: SnapUnit): number {
 export function makeWindow(
   id: string,
   spanCount: number,
-  spanUnit: SnapUnit,
+  spanUnit: SpanUnit,
   snap: SnapUnit,
 ): WindowDef {
   const count = Math.min(MAX_SPAN_COUNT, Math.max(1, Math.floor(spanCount) || 1));
@@ -117,7 +130,12 @@ export const DEFAULT_WINDOWS: WindowDef[] = [
   makeWindow('T8', 14, 'day', 'day'),
 ];
 
+const SPAN_UNITS: SpanUnit[] = ['hour', 'day', 'week', 'month'];
 const SNAP_UNITS: SnapUnit[] = ['hour', 'day'];
+
+function asSpanUnit(value: unknown, fallback: SpanUnit): SpanUnit {
+  return SPAN_UNITS.includes(value as SpanUnit) ? (value as SpanUnit) : fallback;
+}
 
 function asSnapUnit(value: unknown, fallback: SnapUnit): SnapUnit {
   return SNAP_UNITS.includes(value as SnapUnit) ? (value as SnapUnit) : fallback;
@@ -142,7 +160,7 @@ export function normalizeWindows(stored: unknown): WindowDef[] {
     const raw = entry as Partial<WindowDef>;
     const id = typeof raw.id === 'string' ? raw.id.trim() : '';
     if (!id || seen.has(id)) continue;
-    const spanUnit = asSnapUnit(raw.spanUnit, 'hour');
+    const spanUnit = asSpanUnit(raw.spanUnit, 'hour');
     // Pre-`spanCount` records carry only `spanMs`; recover the count from it.
     const count =
       typeof raw.spanCount === 'number' && Number.isFinite(raw.spanCount) && raw.spanCount >= 1
@@ -152,7 +170,7 @@ export function normalizeWindows(stored: unknown): WindowDef[] {
           : 0;
     if (count < 1) continue;
     seen.add(id);
-    windows.push(makeWindow(id, count, spanUnit, asSnapUnit(raw.snap, spanUnit)));
+    windows.push(makeWindow(id, count, spanUnit, asSnapUnit(raw.snap, spanUnit === 'hour' ? 'hour' : 'day')));
     if (windows.length >= MAX_WINDOWS) break;
   }
   if (!windows.length) return [...DEFAULT_WINDOWS];
@@ -175,18 +193,57 @@ export function nextWindowId(existing: WindowDef[]): string {
   return `T${Date.now()}`;
 }
 
+/** Build an inclusive stepped range, skipping equivalent windows already present. */
+export function addWindowRange(
+  existing: WindowDef[],
+  start: number,
+  end: number,
+  step: number,
+  unit: SpanUnit,
+): WindowDef[] {
+  const first = Math.min(MAX_SPAN_COUNT, Math.max(1, Math.floor(start) || 1));
+  const last = Math.min(MAX_SPAN_COUNT, Math.max(first, Math.floor(end) || first));
+  const increment = Math.max(1, Math.floor(step) || 1);
+  const added: WindowDef[] = [];
+  const known = new Set(existing.map((window) => `${window.spanUnit}:${window.spanCount}`));
+
+  for (let count = first; count <= last && existing.length + added.length < MAX_WINDOWS; count += increment) {
+    const key = `${unit}:${count}`;
+    if (known.has(key)) continue;
+    const next = [...existing, ...added];
+    added.push(makeWindow(nextWindowId(next), count, unit, unit === 'hour' ? 'hour' : 'day'));
+    known.add(key);
+  }
+  return added;
+}
+
 /** End of the window: the most recent fully-elapsed hour or UTC day. */
 function snappedEndMs(anchorMs: number, snap: SnapUnit): number {
   const unit = snap === 'hour' ? HOUR_MS : DAY_MS;
   return Math.floor(anchorMs / unit) * unit - unit;
 }
 
+/** Subtract UTC calendar months, clamping month-end dates (e.g. March 31 → Feb 28). */
+function subtractCalendarMonths(timestampMs: number, count: number): number {
+  const date = new Date(timestampMs);
+  const day = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() - count);
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  date.setUTCDate(Math.min(day, lastDay));
+  return date.getTime();
+}
+
 /** Resolve one window against a fixed anchor. */
 export function resolveWindow(def: WindowDef, anchorMs: number): ResolvedWindow {
   const latestMs = snappedEndMs(anchorMs, def.snap);
-  const earliestMs = latestMs - def.spanMs;
+  const earliestMs =
+    def.spanUnit === 'month'
+      ? subtractCalendarMonths(latestMs, def.spanCount)
+      : latestMs - def.spanMs;
   return {
     ...def,
+    spanMs: latestMs - earliestMs,
     earliestSec: Math.floor(earliestMs / 1000),
     latestSec: Math.floor(latestMs / 1000),
     earliestIso: new Date(earliestMs).toISOString(),

@@ -24,6 +24,7 @@ describe('DocsPage', () => {
     'TIERS',
     'DEFAULT_WINDOWS',
     'MAX_WINDOWS',
+    'MAX_SPAN_COUNT',
   ])('reads %s from the code that enforces it rather than restating it', (name) => {
     expect(source).toContain(name);
   });

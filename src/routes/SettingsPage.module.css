@@ -21,6 +21,9 @@
    with the inputs at any column width, and so a row can wrap on a narrow panel
    without the columns coming apart. */
 .windowTable { display: grid; gap: 4px; margin: 6px 0; }
+.windowRamp { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.windowRamp > label { display: grid; gap: 4px; }
+.windowRamp .addWindow { margin: 0; }
 .windowHead, .windowRow {
   display: grid;
   grid-template-columns: 72px 72px 90px 150px 72px auto;

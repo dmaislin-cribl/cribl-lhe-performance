@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addWindowRange,
   DEFAULT_WINDOWS,
   formatBounds,
   MAX_SPAN_COUNT,
@@ -34,6 +35,16 @@ describe('resolveWindow', () => {
     const resolved = resolveWindow(makeWindow('T2', 4, 'hour', 'hour'), ANCHOR);
     expect(resolved.latestSec - resolved.earliestSec).toBe(4 * 3600);
     expect(Number.isInteger(resolved.earliestSec)).toBe(true);
+  });
+
+  it('resolves a calendar month from the snapped UTC end, clamping at month end', () => {
+    const resolved = resolveWindow(
+      makeWindow('M1', 1, 'month', 'day'),
+      Date.UTC(2026, 2, 31, 13, 0, 0),
+    );
+    expect(resolved.latestIso).toBe('2026-03-30T00:00:00.000Z');
+    expect(resolved.earliestIso).toBe('2026-02-28T00:00:00.000Z');
+    expect(resolved.spanMs).toBe(30 * 86_400_000);
   });
 
   // This is the drift bug the absolute-bounds change exists to prevent: two
@@ -84,11 +95,40 @@ describe('makeWindow', () => {
       spanUnit: 'hour',
     });
     expect(makeWindow('T9', 1, 'day', 'day').label).toBe('1 day');
+    expect(makeWindow('T9', 2, 'week', 'day').label).toBe('2 weeks');
+    expect(makeWindow('T9', 1, 'month', 'day').spanMs).toBe(30 * 86_400_000);
   });
 
   it('clamps a nonsense count rather than producing an unsearchable window', () => {
     expect(makeWindow('T9', 0, 'hour', 'hour').spanCount).toBe(1);
     expect(makeWindow('T9', 9999, 'day', 'day').spanCount).toBe(MAX_SPAN_COUNT);
+  });
+});
+
+describe('addWindowRange', () => {
+  it('adds missing daily windows from one through thirty without duplicating existing ones', () => {
+    const added = addWindowRange(DEFAULT_WINDOWS, 1, 30, 1, 'day');
+    // DEFAULT_WINDOWS already has day-unit spans at 2, 7 and 14, so only 27 of the 30 are new.
+    expect(added).toHaveLength(27);
+    expect(
+      [...DEFAULT_WINDOWS, ...added]
+        .filter((window) => window.spanUnit === 'day')
+        .map((window) => window.spanCount)
+        .sort((a, b) => a - b),
+    ).toEqual(Array.from({ length: 30 }, (_, index) => index + 1));
+  });
+
+  it('supports stepped week and month ranges', () => {
+    expect(addWindowRange([], 1, 5, 2, 'week').map((window) => window.label)).toEqual([
+      '1 week',
+      '3 weeks',
+      '5 weeks',
+    ]);
+    expect(addWindowRange([], 1, 3, 1, 'month').map((window) => window.label)).toEqual([
+      '1 month',
+      '2 months',
+      '3 months',
+    ]);
   });
 });
 

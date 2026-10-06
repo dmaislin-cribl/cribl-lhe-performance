@@ -26,7 +26,7 @@ import { MIN_COMPARE_SAMPLES, NOISY_CV, REPORTED_PERCENTILES, quantileMinSamples
 import { MAX_SELECTED } from '../api/searches';
 import { P95_MIN_SAMPLES } from '../api/stats';
 import { TIERS, describeTier } from '../api/tiers';
-import { DEFAULT_WINDOWS, MAX_WINDOWS } from '../api/windows';
+import { DEFAULT_WINDOWS, MAX_SPAN_COUNT, MAX_WINDOWS } from '../api/windows';
 import s from './DocsPage.module.css';
 
 interface Section {
@@ -159,8 +159,10 @@ export default function DocsPage() {
           {DEFAULT_WINDOWS[0].label} to {DEFAULT_WINDOWS[DEFAULT_WINDOWS.length - 1].label}, roughly
           doubling, which is wide enough to show where a size stops scaling without taking all day.
           Edit, add or delete rows in <Link to="/settings">Settings</Link> (up to {MAX_WINDOWS}); the
-          right ramp depends on the dataset, since a 14-day window cannot be measured against four
-          days of retention and an hour does not stress a 14 TB/day engine.
+          range builder can add daily windows from 1 to {MAX_SPAN_COUNT}, or stepped hour, week and
+          month ranges. Weeks are seven days; months follow UTC calendar boundaries. The right ramp
+          depends on the dataset, since a 14-day window cannot be measured against four days of
+          retention and an hour does not stress a 14 TB/day engine.
         </p>
         <p>Two rules make the windows comparable, and both matter more than they look:</p>
         <ul>

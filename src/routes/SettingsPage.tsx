@@ -12,10 +12,12 @@ import { ENGINE_TIERS, describeTier, labelTier, tierDef } from '../api/tiers';
 import {
   MAX_SPAN_COUNT,
   MAX_WINDOWS,
+  addWindowRange,
   makeWindow,
   nextWindowId,
   normalizeWindows,
   type SnapUnit,
+  type SpanUnit,
   type WindowDef,
 } from '../api/windows';
 import StatusBanner from '../components/StatusBanner';
@@ -27,6 +29,10 @@ export default function SettingsPage() {
   const [error, setError] = useState('');
   /** Window ids that already have measured runs — see `measuredIds`. */
   const [runWindows, setRunWindows] = useState<string[]>([]);
+  const [rampStart, setRampStart] = useState(1);
+  const [rampEnd, setRampEnd] = useState(30);
+  const [rampStep, setRampStep] = useState(1);
+  const [rampUnit, setRampUnit] = useState<SpanUnit>('day');
 
   // Load the same config record the workbench uses, so the two pages cannot
   // disagree about the dataset or repetition count.
@@ -147,6 +153,72 @@ export default function SettingsPage() {
       </span>
 
       <label>Time windows</label>
+      <div className={s.windowRamp}>
+        <label>
+          From
+          <input
+            className={s.windowNum}
+            aria-label="Range start"
+            type="number"
+            min={1}
+            max={MAX_SPAN_COUNT}
+            value={rampStart}
+            onChange={(event) => setRampStart(Number(event.target.value) || 1)}
+          />
+        </label>
+        <label>
+          To
+          <input
+            className={s.windowNum}
+            aria-label="Range end"
+            type="number"
+            min={rampStart}
+            max={MAX_SPAN_COUNT}
+            value={rampEnd}
+            onChange={(event) => setRampEnd(Number(event.target.value) || rampStart)}
+          />
+        </label>
+        <label>
+          Step
+          <input
+            className={s.windowNum}
+            aria-label="Range step"
+            type="number"
+            min={1}
+            max={MAX_SPAN_COUNT}
+            value={rampStep}
+            onChange={(event) => setRampStep(Number(event.target.value) || 1)}
+          />
+        </label>
+        <label>
+          Unit
+          <select
+            className={s.windowSel}
+            aria-label="Range unit"
+            value={rampUnit}
+            onChange={(event) => setRampUnit(event.target.value as SpanUnit)}
+          >
+            <option value="day">days</option>
+            <option value="week">weeks</option>
+            <option value="month">months</option>
+            <option value="hour">hours</option>
+          </select>
+        </label>
+        <button
+          className={s.addWindow}
+          onClick={() => {
+            const added = addWindowRange(config.windows, rampStart, rampEnd, rampStep, rampUnit);
+            if (added.length) setConfig({ ...config, windows: [...config.windows, ...added] });
+          }}
+          disabled={config.windows.length >= MAX_WINDOWS}
+        >
+          Add range
+        </button>
+      </div>
+      <span className={s.hint}>
+        Add a stepped series in one action, such as days 1–30. Existing spans with the same unit are
+        skipped. Weeks are seven days; months use calendar months in UTC.
+      </span>
       <div className={s.windowTable}>
         <div className={s.windowHead}>
           <span>Id</span>
@@ -188,6 +260,8 @@ export default function SettingsPage() {
               >
                 <option value="hour">hours</option>
                 <option value="day">days</option>
+                <option value="week">weeks</option>
+                <option value="month">months</option>
               </select>
               <select
                 className={s.windowSel}
