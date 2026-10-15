@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       # The skeleton ships no package-lock.json: pinning every dependency
       # at scaffold time would hand each new app a tree that is already
       # stale. But the release-build action runs `npm ci`, and its
