@@ -48,7 +48,7 @@ jobs:
       # supply-chain hygiene every other step here follows (and which
       # `npm run security:static` enforces), not a framework source
       # dependency.
-      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@5c7659bbcbdd0a4ef366f4767bfee70cf5523251
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@25960a5208bb9d6f240bb7d530da2c1d70fe3bd6
         with:
           registry-token: ${{ github.token }}
       - name: Retain exact tested candidate
