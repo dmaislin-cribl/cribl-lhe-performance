@@ -23,7 +23,7 @@
     "@capra/core": "^1.15.0",
     "@criblio/app-utils": "^0.8.3",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react-dom": "^19.3.1",
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
