@@ -124,7 +124,7 @@ tag, in a clean working tree:
 ```bash
 npm run lint          # must pass — what the workflow gates on
 npm test              # unit tests
-npx tsc --noEmit      # type-check
+npx tsc -b            # type-check (not --noEmit: the root tsconfig only references sub-projects, so that checks nothing)
 npm pkg set version=X.Y.Z && npm run package -- --version X.Y.Z
 ```
 
