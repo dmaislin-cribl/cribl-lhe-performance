@@ -57,6 +57,7 @@ tool runs it automatically after install — same code path as
 ```bash
 npm run deploy           # full pipeline (bumps the patch version)
 VERSION=0.9.0 npm run deploy:version   # deploy as an exact version
+npm run deploy:artifact -- --artifact build/<file>.tgz   # deploy a pack as-is (CI uses this)
 npm run provision        # reconcile scheduled searches only
 npm run provision -- --dry  # show plan without applying
 ```
