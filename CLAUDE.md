@@ -71,6 +71,18 @@ which also skips the tool's own `verify`, so the scripts run `verify`
 themselves. The deploy target comes from `CRIBL_BASE_URL` in `.env` or
 the environment.
 
+**Strict mode is deliberately off.** `package.json` ships
+`"cribl": { "appAuthMode": "legacy" }` — the *Open* setting of the
+**Strict mode** toggle on the app's Permissions tab, where the app
+inherits each user's own permissions plus `policies.yml`.
+(`policiesOnly` is Strict: only `policies.yml`, admins included.) It is
+shipped rather than left to the toggle because an upgrade applies the
+package's value and only falls back to the previously stored mode when
+the package has none — so without it, one flip of the toggle would stick
+across every later deploy. Keep `policies.yml` complete anyway: it is
+what a non-admin user shared the app is granted, and it is all the app
+gets if the mode is ever switched to Strict.
+
 The provisioner prints each action:
 
 ```
