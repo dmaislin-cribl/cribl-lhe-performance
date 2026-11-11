@@ -41,6 +41,7 @@ const SECTIONS: Section[] = [
   { id: 'repetitions', title: 'Repetitions and the statistics they buy' },
   { id: 'sizes', title: 'Engine sizes and sweeps' },
   { id: 'federated', title: 'Federated search' },
+  { id: 'results', title: 'Seeing what a search returned' },
   { id: 'sessions', title: 'Sessions and reading results' },
   { id: 'analysis', title: 'Analysis: is the difference real?' },
   { id: 'defensible', title: 'Before you show a customer' },
@@ -311,6 +312,14 @@ export default function DocsPage() {
           follows the filter, so filtering to Federated offers only federated datasets.
         </p>
         <p>
+          Federated search runs on two engines, <b>v1</b> and the newer <b>v2</b>. Each federated
+          dataset and search is labelled with its version, and under Federated the list can be
+          narrowed to v1 or v2. Built-in datasets that declare no version (Cribl Edge, the
+          internal logs, <code>cribl_search_sample</code>) run on v1 according to their own job
+          records, so they are labelled v1. The <b>Version</b> column in the results is not read
+          from the catalog: it is what each run&rsquo;s job record says the server used.
+        </p>
+        <p>
           Changing a search&rsquo;s dataset edits the search, unless it already has measured runs.
           Then a copy named for the new dataset takes its place, and the original keeps its runs.
           Otherwise Analysis would pool timings from two datasets under one search.
@@ -372,6 +381,18 @@ export default function DocsPage() {
             like-for-like comparison.
           </li>
         </ul>
+      </section>
+
+      <section className={s.block} id="results">
+        <h2>Seeing what a search returned</h2>
+        <p>
+          Every run in <b>Every run</b> has a <b>View</b> button. It fetches the rows that run
+          returned from the server (the first 100, up to 30 columns) and shows them with the total
+          row count. <b>Copy rows (CSV)</b> puts them on the clipboard. The app stores no results
+          itself, so the run history stays small. The server keeps a job&rsquo;s results for a
+          while and then expires them, and the viewer then says so; re-run the search to see them
+          again.
+        </p>
       </section>
 
       <section className={s.block} id="sessions">

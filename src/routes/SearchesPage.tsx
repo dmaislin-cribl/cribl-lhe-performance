@@ -17,7 +17,10 @@ import {
   PLACEMENT_LABEL,
   classifyDataset,
   classifySearch,
+  datasetOptionLabel,
+  datasetVersion,
   groupDatasets,
+  searchVersion,
   type SearchPlacement,
 } from '../api/federated';
 import { useDatasetCatalog } from '../api/useDatasetCatalog';
@@ -81,6 +84,8 @@ export default function SearchesPage() {
   const [message, setMessage] = useState('');
   const [pendingDelete, setPendingDelete] = useState<SavedSearch | null>(null);
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
+  /** Under Federated only: narrow to the v1 or v2 federated search engine. */
+  const [versionFilter, setVersionFilter] = useState<'any' | 'v1' | 'v2'>('any');
   const [searchGroup, setSearchGroup] = useState(DEFAULT_CONFIG.searchGroup);
   const catalog = useDatasetCatalog(searchGroup);
 
@@ -95,6 +100,44 @@ export default function SearchesPage() {
     return map;
   }, [library, catalog]);
 
+  /** Federated engine version per search; mixed counts under both. */
+  const versions = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof searchVersion>>();
+    for (const entry of library?.searches ?? []) map.set(entry.id, searchVersion(entry.text, catalog));
+    return map;
+  }, [library, catalog]);
+
+  /** The list filter: kind first, then — under Federated — engine version. */
+  const listed = useCallback(
+    (entry: SavedSearch) => {
+      if (!matchesKind(placements.get(entry.id) ?? 'unknown', kindFilter)) return false;
+      if (kindFilter !== 'federated' || versionFilter === 'any') return true;
+      const version = versions.get(entry.id);
+      return version === versionFilter || version === 'mixed';
+    },
+    [placements, versions, kindFilter, versionFilter],
+  );
+
+  /**
+   * The open search stays listed whatever the filter — but only while it has no
+   * dataset to classify by. That is the case it exists for: a draft just added
+   * under a filter must not vanish before it names a dataset. A search that does
+   * name one follows the filter like any other.
+   */
+  const keptOpen = useCallback(
+    (entry: SavedSearch) => entry.id === editingId && (placements.get(entry.id) ?? 'unknown') === 'unknown',
+    [editingId, placements],
+  );
+
+  const versionCounts = useMemo(() => {
+    const federated = (library?.searches ?? []).filter((entry) =>
+      matchesKind(placements.get(entry.id) ?? 'unknown', 'federated'),
+    );
+    const count = (v: 'v1' | 'v2') =>
+      federated.filter((entry) => versions.get(entry.id) === v || versions.get(entry.id) === 'mixed').length;
+    return { any: federated.length, v1: count('v1'), v2: count('v2') };
+  }, [library, placements, versions]);
+
   const kindCounts = useMemo(() => {
     const all = library?.searches ?? [];
     const count = (filter: KindFilter) =>
@@ -106,10 +149,13 @@ export default function SearchesPage() {
    * The picker follows the filter: filtering to Federated is the moment someone
    * is writing a federated search, so only federated datasets are offered.
    */
-  const datasetGroups = useMemo(
-    () => groupDatasets(catalog, kindFilter === 'all' ? undefined : kindFilter),
-    [catalog, kindFilter],
-  );
+  const datasetGroups = useMemo(() => {
+    const groups = groupDatasets(catalog, kindFilter === 'all' ? undefined : kindFilter);
+    if (kindFilter !== 'federated' || versionFilter === 'any') return groups;
+    return groups
+      .map((group) => ({ ...group, ids: group.ids.filter((id) => datasetVersion(catalog, id) === versionFilter) }))
+      .filter((group) => group.ids.length > 0);
+  }, [catalog, kindFilter, versionFilter]);
 
   useEffect(() => {
     void loadLibrary().then((loaded) => {
@@ -303,21 +349,44 @@ export default function SearchesPage() {
             </div>
           )}
 
+          {/* Federated runs on two search engines; v2 is the newer one. Narrows the
+              list and the Dataset picker together. */}
+          {kindFilter === 'federated' && (
+            <div className={`${s.kindFilter} ${s.versionFilter}`} role="radiogroup" aria-label="Federated engine version">
+              {(
+                [
+                  ['any', 'Any version'],
+                  ['v1', 'v1'],
+                  ['v2', 'v2'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  role="radio"
+                  aria-checked={versionFilter === value}
+                  className={versionFilter === value ? s.kindActive : ''}
+                  onClick={() => setVersionFilter(value)}
+                >
+                  {label} <span className={s.kindCount}>{versionCounts[value]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {library.searches.length > 0 &&
             kindFilter !== 'all' &&
             !library.searches.some(
-              (entry) => entry.id === editingId || matchesKind(placements.get(entry.id) ?? 'unknown', kindFilter),
+              (entry) => keptOpen(entry) || listed(entry),
             ) && (
               <p className={s.listEmpty}>
-                No {kindFilter === 'lakehouse' ? 'Lakehouse' : 'federated'} searches yet. <b>+ Add</b> one and
+                No {kindFilter === 'lakehouse' ? 'Lakehouse' : versionFilter === 'any' ? 'federated' : `federated ${versionFilter}`} searches yet. <b>+ Add</b> one and
                 pick a dataset for it.
               </p>
             )}
 
           {library.searches
             .filter(
-              (entry) =>
-                entry.id === editingId || matchesKind(placements.get(entry.id) ?? 'unknown', kindFilter),
+              (entry) => keptOpen(entry) || listed(entry),
             )
             .map((entry) => {
             const chosen = isSelected(library, entry.id);
@@ -346,6 +415,7 @@ export default function SearchesPage() {
                         title={PLACEMENT_HINT[placement]}
                       >
                         {PLACEMENT_LABEL[placement]}
+                        {placement === 'federated' && versions.get(entry.id) && ` · ${versions.get(entry.id)}`}
                       </span>
                     )}
                   </span>
@@ -454,7 +524,7 @@ export default function SearchesPage() {
                   <optgroup key={group.label} label={group.label}>
                     {group.ids.map((id) => (
                       <option key={id} value={id}>
-                        {id}
+                        {datasetOptionLabel(catalog, id)}
                       </option>
                     ))}
                   </optgroup>
@@ -462,7 +532,7 @@ export default function SearchesPage() {
               </select>
               <span className={s.hint}>
                 {kindFilter === 'all'
-                  ? 'Lakehouse datasets are timed on engine sizes; federated datasets on the federated executors. Sets the dataset= term below.'
+                  ? 'Lakehouse datasets are timed on engine sizes; federated datasets on the federated executors, on the v1 or v2 search engine shown beside each. Sets the dataset= term below.'
                   : `Showing ${kindFilter === 'lakehouse' ? 'Lakehouse' : 'federated'} datasets only, to match the list filter. Sets the dataset= term below.`}
               </span>
             </>

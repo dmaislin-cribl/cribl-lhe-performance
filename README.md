@@ -14,6 +14,8 @@ Cribl Performance Testing is a Cribl Search app for repeatable search benchmarks
   * **Pick the dataset per search,** from a list grouped by where the data lives: Lakehouse, then Federated by storage type (Amazon S3, Azure Blob Storage, Google Cloud Storage, Cribl Lake, Cribl Edge, HTTP API …).
   * **Server-side timings.** Every run records the total time, split into queue wait and execution. Federated runs also record billable CPU-seconds, executor fan-out, and how long the run waited for compute to start.
   * **Statistics that don't overstate.** Medians, percentiles only once the sample supports them, confidence intervals, and a significance test between sizes, or between Lakehouse and federated.
+  * **See what each search returned.** Any recorded run can show the rows its search returned, fetched from the server on demand.
+  * **Federated v1 and v2.** Every federated dataset and search is labelled with the search engine version it runs on, the list filters by version, and each run records the version the server actually used.
   * **Named sessions and exports.** Every run session is named and kept. Results copy to the clipboard as CSV or Markdown, with the build and query provenance attached.
 * Intended users:
   * Solutions engineers and platform owners sizing or validating Cribl Search.
@@ -76,7 +78,7 @@ Nothing is required before first use. Everything below has a working default and
 2. On the workbench, choose a test type: **Lakehouse engine sizes** or **Federated search**.
 3. On each search, pick the **Dataset** to test. For a federated test, choose one under a "Federated" group.
 4. Pick a time window, or press **All windows**, and press **Time**.
-5. Read the results on the workbench, then open **Analysis** to see whether differences are real and **Compare** for every window side by side.
+5. Read the timings on the workbench, and press **View** on any run to see the rows it returned. Then open **Analysis** to see whether differences are real and **Compare** for every window side by side.
 
 ### First-Run Checklist
 * Add at least one test search, and tick it to include it in the next session.
@@ -116,6 +118,7 @@ None. The app talks only to the Cribl Search API of the workspace it is installe
 
 ## Data And Storage
 
+* Search results are not stored: **View** fetches them from the server when asked, and they are available only as long as the server keeps the job's results.
 * The app keeps three records in its app-scoped KV store: `settings` (configuration), `searches` (the test-search library) and `runs` (run history and named sessions).
 * Data is shared by everyone who uses the app in the workspace.
 * Run history is capped at the most recent 2,000 runs.

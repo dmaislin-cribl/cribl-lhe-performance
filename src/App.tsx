@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiUrl } from './api/cribl';
-import { PerfRunError, runTimedQuery } from './api/perfRun';
+import { PerfRunError, parseResultsPayload, runTimedQuery, searchBase } from './api/perfRun';
 import { formatBounds, resolveWindows, type WindowDef } from './api/windows';
 import { P95_MIN_SAMPLES, countsAgree, formatSec, summarizeSamples } from './api/stats';
 import {
@@ -26,7 +26,7 @@ import {
   planSweep,
   validateSweep,
 } from './api/engineSweep';
-import { copyToClipboard, provenanceBlock, runsToCsv } from './api/exportResults';
+import { copyToClipboard, provenanceBlock, runsToCsv, toCsv } from './api/exportResults';
 import {
   MAX_SELECTED,
   deriveDataset,
@@ -58,7 +58,10 @@ import {
   waitedForCompute,
   PLACEMENT_HINT,
   PLACEMENT_LABEL,
+  datasetOptionLabel,
+  federatedVersions,
   runsOnTarget,
+  searchVersion,
   type SearchPlacement,
 } from './api/federated';
 import {
@@ -97,6 +100,17 @@ const RESIZE_TIMEOUT_MS = 30 * 60_000;
 
 /** Per-resize allowance in the wall-clock estimate. Deliberately pessimistic. */
 const RESIZE_SETTLE_SEC = 180;
+
+/** Rows fetched for the results viewer. A look at the output, not an export of it. */
+const RESULTS_LIMIT = 100;
+/** Columns shown; a wide raw event can carry hundreds of fields. */
+const RESULT_COLUMNS_LIMIT = 30;
+
+/** One cell of the results viewer: objects as JSON, long values cut short. */
+function resultCell(value: unknown): string {
+  const text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+}
 
 function runId(): string {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
@@ -163,6 +177,14 @@ export default function App() {
     null,
   );
   const [pendingClear, setPendingClear] = useState(false);
+  /** The run whose returned rows are being viewed, or null. */
+  const [resultsView, setResultsView] = useState<{
+    run: RunRecord;
+    loading: boolean;
+    rows: Record<string, unknown>[];
+    total: number | null;
+    error: string;
+  } | null>(null);
   const [previewAnchor, setPreviewAnchor] = useState(0);
   const [refreshingEngines, setRefreshingEngines] = useState(false);
   /**
@@ -799,6 +821,8 @@ export default function App() {
           // Counted only where the server reported node statuses at all.
           coldRuns: ok.filter((run) => waitedForCompute(run.computeWaitMs) === true).length,
           coldKnown: ok.filter((run) => waitedForCompute(run.computeWaitMs) !== null).length,
+          // What the server ran it on, from the runs themselves — never from the catalog.
+          version: [...new Set(ok.map((run) => federatedVersions(run.computeTypes)).filter(Boolean))].join(', '),
           errors: forRow.length - ok.length,
           consistent: countsAgree(counts),
           eventCount: counts.find((value) => typeof value === 'number') ?? null,
@@ -966,6 +990,53 @@ export default function App() {
     },
     [library, runnable],
   );
+
+  /**
+   * Fetch what a run's search returned, from the server, when asked.
+   *
+   * Not stored in the app: results can be large, the run log is one KV record,
+   * and the server already keeps each job's results for a while. The cost is
+   * that results expire server-side — the viewer says so rather than showing
+   * an empty table that would read as "the search found nothing".
+   */
+  const openResults = useCallback(async (run: RunRecord) => {
+    setResultsView({ run, loading: true, rows: [], total: null, error: '' });
+    try {
+      const response = await fetch(
+        `${apiUrl().replace(/\/$/, '')}${searchBase(run.searchGroup || config.searchGroup)}/jobs/${encodeURIComponent(run.jobId)}/results?offset=0&limit=${RESULTS_LIMIT}`,
+      );
+      if (response.status === 404) {
+        setResultsView({
+          run,
+          loading: false,
+          rows: [],
+          total: null,
+          error: 'The server no longer has results for this job — search results expire after a while. Re-run the search to see them.',
+        });
+        return;
+      }
+      if (!response.ok) throw new Error(`Reading results failed (${response.status})`);
+      const { header, rows } = parseResultsPayload(await response.text());
+      setResultsView({
+        run,
+        loading: false,
+        rows,
+        total: typeof header.totalEventCount === 'number' ? header.totalEventCount : null,
+        error: '',
+      });
+    } catch (cause) {
+      setResultsView({ run, loading: false, rows: [], total: null, error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }, [config.searchGroup]);
+
+  /** Columns for the results table: every key the rows carry, first-seen order, capped. */
+  const resultColumns = useMemo(() => {
+    const keys: string[] = [];
+    for (const row of resultsView?.rows ?? []) {
+      for (const key of Object.keys(row)) if (!keys.includes(key)) keys.push(key);
+    }
+    return keys.slice(0, RESULT_COLUMNS_LIMIT);
+  }, [resultsView]);
 
   /** Switch test type. Persisted: an operator running federated tests keeps doing so. */
   const setTestMode = useCallback((next: TestMode) => {
@@ -1234,6 +1305,8 @@ export default function App() {
                 <b>{search.name}</b>
                 <span className={s.tag} title={PLACEMENT_HINT[placement]}>
                   {PLACEMENT_LABEL[placement]}
+                  {placement === 'federated' && searchVersion(search.text, catalog) &&
+                    ` · ${searchVersion(search.text, catalog)}`}
                 </span>
               </div>
               {/* Which dataset this search tests, grouped by where it lives. Only
@@ -1261,7 +1334,7 @@ export default function App() {
                       <optgroup key={group.label} label={group.label}>
                         {group.ids.map((id) => (
                           <option key={id} value={id}>
-                            {id}
+                            {datasetOptionLabel(catalog, id)}
                           </option>
                         ))}
                       </optgroup>
@@ -1558,6 +1631,9 @@ export default function App() {
                   <th title="Timed runs that spent time waiting for compute nodes, out of those whose job reported it (compute v1 does not). The main source of federated variance; Analysis can split them out.">
                     Waited for compute
                   </th>
+                  <th title="Federated search engine version the server ran these on, as each run's job record reports it">
+                    Version
+                  </th>
                 </>
               )}
               <th>Events</th>
@@ -1593,6 +1669,7 @@ export default function App() {
                     <td>{formatSec(row.cpuMedian)}</td>
                     <td>{row.executorsMedian === null ? '—' : Math.round(row.executorsMedian)}</td>
                     <td>{row.coldKnown ? `${row.coldRuns}/${row.coldKnown}` : '—'}</td>
+                    <td>{row.version || '—'}</td>
                   </>
                 )}
                 <td>{row.eventCount === null ? '—' : row.eventCount.toLocaleString()}</td>
@@ -1725,6 +1802,7 @@ export default function App() {
               <th>Events</th>
               <th>Status</th>
               <th>Notes</th>
+              <th title="What the search returned, fetched from the server on demand">Results</th>
             </tr>
           </thead>
           <tbody>
@@ -1752,6 +1830,16 @@ export default function App() {
                   </span>
                 </td>
                 <td>{run.notes || (run.measured ? 'Timed' : 'Warm-up')}</td>
+                <td>
+                  <button
+                    className={s.linkish}
+                    disabled={!run.jobId}
+                    onClick={() => void openResults(run)}
+                    title={run.jobId ? 'Show the rows this run returned' : 'No job id was recorded for this run'}
+                  >
+                    View
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1908,6 +1996,77 @@ export default function App() {
                 }}
               >
                 Start ({pendingSweep.plan.totalRuns} runs)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resultsView && (
+        <div className={s.modalScrim} role="presentation" onClick={() => setResultsView(null)}>
+          <div
+            className={`${s.modal} ${s.resultsModal}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="results-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="results-title">
+              Results — {resultsView.run.searchName || 'search'} · {resultsView.run.window} · {labelTier(resultsView.run.engine)}
+            </h2>
+            <p className={s.muted}>
+              Run at {resultsView.run.at.replace('T', ' ').slice(0, 19)}Z · job{' '}
+              <span className={s.mono}>{resultsView.run.jobId}</span>
+              {resultsView.total !== null &&
+                ` · ${resultsView.total.toLocaleString()} ${resultsView.total === 1 ? 'row' : 'rows'} in total${
+                  resultsView.total > resultsView.rows.length ? `, first ${resultsView.rows.length} shown` : ''
+                }`}
+            </p>
+            {resultsView.loading && <p>Loading results…</p>}
+            {resultsView.error && <div className={s.error}>{resultsView.error}</div>}
+            {!resultsView.loading && !resultsView.error && !resultsView.rows.length && (
+              <p>The search returned no rows.</p>
+            )}
+            {resultsView.rows.length > 0 && (
+              <div className={s.resultsScroll}>
+                <table>
+                  <thead>
+                    <tr>
+                      {resultColumns.map((key) => (
+                        <th key={key}>{key}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resultsView.rows.map((row, index) => (
+                      <tr key={index}>
+                        {resultColumns.map((key) => (
+                          <td key={key} className={s.mono}>
+                            {resultCell(row[key])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className={s.modalActions}>
+              {resultsView.rows.length > 0 && (
+                <button
+                  onClick={async () => {
+                    const ok = await copyToClipboard(
+                      toCsv([resultColumns, ...resultsView.rows.map((row) => resultColumns.map((key) => resultCell(row[key])))]),
+                    );
+                    setMessage(ok ? `Copied ${resultsView.rows.length} result rows as CSV.` : '');
+                    if (!ok) setError('The clipboard is unavailable here.');
+                  }}
+                >
+                  Copy rows (CSV)
+                </button>
+              )}
+              <button className={s.primary} onClick={() => setResultsView(null)}>
+                Close
               </button>
             </div>
           </div>

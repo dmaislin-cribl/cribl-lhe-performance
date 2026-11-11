@@ -120,3 +120,5 @@
 .kindTag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 700; background: var(--cds-color-bg-muted); color: var(--cds-color-fg-muted); vertical-align: 1px; }
 .kindTagLakehouse { color: var(--chart-5); }
 .kindTagFederated { color: var(--chart-federated); }
+.versionFilter { margin-top: -4px; }
+.versionFilter button { font-size: 11px; padding: 3px 6px; }

@@ -237,6 +237,8 @@ export interface DatasetDef {
   provider?: string;
   /** Member datasets, on a `cribl_meta` dataset such as `default`. */
   datasets?: string[];
+  /** Federated search engine version the dataset is set to (`v1` / `v2`), when declared. */
+  searchVersion?: string;
 }
 
 export type DatasetCatalog = Map<string, DatasetDef>;
@@ -253,6 +255,7 @@ export function buildCatalog(items: unknown): DatasetCatalog {
       datasets: Array.isArray(entry.datasets)
         ? entry.datasets.filter((member): member is string => typeof member === 'string')
         : undefined,
+      searchVersion: typeof entry.searchVersion === 'string' ? entry.searchVersion : undefined,
     });
   }
   return catalog;
@@ -327,6 +330,63 @@ function allDatasetGroups(catalog: DatasetCatalog | null): DatasetGroup[] {
   }
   if (other.length) groups.push({ label: 'Other (resolves to other datasets)', placement: 'other', ids: sort(other) });
   return groups;
+}
+
+/**
+ * Which federated search engine a dataset runs on — `v1` or `v2` — or null for
+ * Lakehouse datasets, unknown ids, and meta datasets whose members disagree.
+ *
+ * The version comes from the dataset's `searchVersion`. Cribl's built-in
+ * datasets (Edge, leader logs, `cribl_search_sample`) do not declare one, and
+ * every one checked ran on `v1` according to its own job record
+ * (`stages[].computeTypeByDatasetId`), so an undeclared version is `v1`. The
+ * run itself is the authority either way: each run records the compute type
+ * the server actually used (`RunRecord.computeTypes`).
+ */
+export function datasetVersion(
+  catalog: DatasetCatalog | null,
+  id: string,
+  seen: Set<string> = new Set(),
+): FederatedVersion | null {
+  if (!catalog) return null;
+  const def = catalog.get(id);
+  if (!def || seen.has(id)) return null;
+  seen.add(id);
+  if (def.type === 'cribl_meta') {
+    const versions = new Set((def.datasets ?? []).map((member) => datasetVersion(catalog, member, seen)));
+    return versions.size === 1 ? ([...versions][0] ?? null) : null;
+  }
+  if (classifyDataset(catalog, id) !== 'federated') return null;
+  return def.searchVersion === 'v2' ? 'v2' : 'v1';
+}
+
+export type FederatedVersion = 'v1' | 'v2';
+
+/**
+ * The federated version a saved search runs on: one version, `mixed` when it
+ * reads datasets on both, or null when it is not a classifiable federated
+ * search (Lakehouse, a wildcard, no dataset term, no catalog).
+ */
+export function searchVersion(text: string, catalog: DatasetCatalog | null): FederatedVersion | 'mixed' | null {
+  if (!catalog || classifySearch(text, catalog) === 'unknown') return null;
+  const ids = deriveDataset(text)
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const versions = new Set(ids.map((id) => datasetVersion(catalog, id)).filter((v): v is FederatedVersion => v !== null));
+  if (!versions.size) return null;
+  return versions.size === 1 ? [...versions][0] : 'mixed';
+}
+
+/** A picker option: the id, plus its federated version when it has one. */
+export function datasetOptionLabel(catalog: DatasetCatalog | null, id: string): string {
+  const version = datasetVersion(catalog, id);
+  return version ? `${id} · ${version}` : id;
+}
+
+/** "v2", "v1 + v2" — the compute versions a run reports, without Lakehouse's `local`. */
+export function federatedVersions(computeTypes: string[] | undefined): string {
+  return (computeTypes ?? []).filter((type) => type !== 'local').join(' + ');
 }
 
 /**

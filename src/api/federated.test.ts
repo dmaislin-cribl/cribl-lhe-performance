@@ -271,3 +271,45 @@ describe('groupDatasets for one test type', () => {
     }
   });
 });
+
+describe('federated versions', () => {
+  const catalog = buildCatalog([
+    { id: 'lh', type: 'cribl_search', provider: 'lakehouse', searchVersion: 'v1' },
+    { id: 's3_v2', type: 's3', searchVersion: 'v2' },
+    { id: 's3_v1', type: 's3', searchVersion: 'v1' },
+    // Cribl's built-ins declare no version and run on v1 (checked against job records).
+    { id: 'edge_logs', type: 'cribl_edge' },
+    { id: 'default', type: 'cribl_meta', datasets: ['s3_v2'] },
+    { id: 'split', type: 'cribl_meta', datasets: ['s3_v1', 's3_v2'] },
+  ]);
+
+  it('reads a dataset version, treating an undeclared one as v1', async () => {
+    const { datasetVersion } = await import('./federated');
+    expect(datasetVersion(catalog, 's3_v2')).toBe('v2');
+    expect(datasetVersion(catalog, 's3_v1')).toBe('v1');
+    expect(datasetVersion(catalog, 'edge_logs')).toBe('v1');
+    expect(datasetVersion(catalog, 'default')).toBe('v2');
+    // Lakehouse is not federated, whatever its own searchVersion says.
+    expect(datasetVersion(catalog, 'lh')).toBeNull();
+    expect(datasetVersion(catalog, 'split')).toBeNull();
+    expect(datasetVersion(catalog, 'nope')).toBeNull();
+    expect(datasetVersion(null, 's3_v2')).toBeNull();
+  });
+
+  it('gives a search one version, mixed, or none', async () => {
+    const { searchVersion } = await import('./federated');
+    expect(searchVersion('dataset="s3_v2" | count', catalog)).toBe('v2');
+    expect(searchVersion('dataset=s3_v1,s3_v2', catalog)).toBe('mixed');
+    expect(searchVersion('dataset="lh"', catalog)).toBeNull();
+    expect(searchVersion('dataset="s3_*"', catalog)).toBeNull();
+  });
+
+  it('labels picker options and run compute types', async () => {
+    const { datasetOptionLabel, federatedVersions } = await import('./federated');
+    expect(datasetOptionLabel(catalog, 's3_v2')).toBe('s3_v2 · v2');
+    expect(datasetOptionLabel(catalog, 'lh')).toBe('lh');
+    expect(federatedVersions(['v2'])).toBe('v2');
+    expect(federatedVersions(['local'])).toBe('');
+    expect(federatedVersions(['local', 'v1', 'v2'])).toBe('v1 + v2');
+  });
+});
