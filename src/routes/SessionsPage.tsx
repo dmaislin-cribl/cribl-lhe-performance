@@ -264,7 +264,7 @@ export default function SessionsPage() {
               <dd>{session.searchNames.length ? session.searchNames.join(', ') : '—'}</dd>
               <dt>Windows</dt>
               <dd>{session.windowIds.length ? session.windowIds.join(', ') : '—'}</dd>
-              <dt>Engine size</dt>
+              <dt>Started on</dt>
               <dd>{describeTier(session.tier)}</dd>
             </dl>
 

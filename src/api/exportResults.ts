@@ -274,7 +274,7 @@ export function analysisToCsv(rows: SizeAnalysis[]): string {
  * qualifier, and nothing a reader has to be walked through.
  */
 export function analysisToMarkdown(rows: SizeAnalysis[], baseline: string): string {
-  const header = ['Engine size', 'Runs', 'Median', 'p95', 'Variability', `vs ${labelTier(baseline)}`, 'Significant?'];
+  const header = ['Target', 'Runs', 'Median', 'p95', 'Variability', `vs ${labelTier(baseline)}`, 'Significant?'];
   const body = rows.map((row) => {
     const comparison = row.vsBaseline;
     const change =

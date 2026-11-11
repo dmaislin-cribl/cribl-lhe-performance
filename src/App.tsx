@@ -617,7 +617,10 @@ export default function App() {
           log.sessions,
           sessionName.trim() ||
             suggestSessionName({
-              tier: sweeping ? `${plan.steps.length} sizes` : labelTier(plan.steps[0].tier),
+              // "Targets" once Federated is in the plan: it is not a size.
+              tier: sweeping
+                ? `${plan.steps.length} ${plan.steps.some((step) => isFederated(step.tier)) ? 'targets' : 'sizes'}`
+                : labelTier(plan.steps[0].tier),
               windowCount: resolved.length,
               searchCount: chosen.length,
             }),
@@ -678,7 +681,7 @@ export default function App() {
         }
         closeSession(session.id, 'complete');
         setMessage(
-          `“${session.name}” finished: ${chosen.length} ${chosen.length === 1 ? 'search' : 'searches'} × ${resolved.length} ${resolved.length === 1 ? 'window' : 'windows'} on ${plan.steps.map((step) => labelTier(step.tier)).join(', ')}. Open Analysis to see whether the differences between those sizes are real.`,
+          `“${session.name}” finished: ${chosen.length} ${chosen.length === 1 ? 'search' : 'searches'} × ${resolved.length} ${resolved.length === 1 ? 'window' : 'windows'} on ${plan.steps.map((step) => labelTier(step.tier)).join(', ')}. Open Analysis to see whether the differences between ${plan.steps.some((step) => isFederated(step.tier)) ? 'those targets' : 'those sizes'} are real.`,
         );
       } catch (cause) {
         if (controller.signal.aborted) {

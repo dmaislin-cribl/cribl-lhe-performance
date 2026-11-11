@@ -513,7 +513,7 @@ export default function AnalysisPage() {
               <table className={s.table}>
                 <thead>
                   <tr>
-                    <th>Engine size</th>
+                    <th>Target</th>
                     <th title="Timed runs behind this row">Runs</th>
                     <th>Failed</th>
                     <th>Fastest</th>
@@ -596,7 +596,7 @@ export default function AnalysisPage() {
               <table className={s.table}>
                 <thead>
                   <tr>
-                    <th>Engine size</th>
+                    <th>Target</th>
                     <th>Runs</th>
                     <th title="Hodges-Lehmann shift: the median of every pairwise difference. Negative is faster.">
                       Shift vs baseline
