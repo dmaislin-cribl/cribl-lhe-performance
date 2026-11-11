@@ -1,4 +1,9 @@
-# cribl-lhe-performance
+# Cribl Performance Testing
+
+App id `cribl-lhe-performance` — kept on purpose; see "App id and
+version" in `AGENTS.md` before renaming it. Measures Cribl Search
+performance two ways: Lakehouse searches across engine sizes, and
+federated searches over remote data (S3, Azure Blob, GCS, Cribl Lake …).
 
 A Cribl Search App (Vite + React + TypeScript) that runs inside
 Cribl Search as a sandboxed iframe. Ship target: Cribl Cloud.

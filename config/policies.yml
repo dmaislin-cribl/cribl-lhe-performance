@@ -1,4 +1,4 @@
-# Product API access required by the Cribl LHE Performance Lab.
+# Product API access required by Cribl Performance Testing.
 # App visibility/ACL is controlled by the workspace install, not this file.
 policies:
   # Search execution and result polling used by @criblio/app-utils/search.
