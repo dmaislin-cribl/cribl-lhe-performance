@@ -80,7 +80,7 @@ Nothing is required before first use. Everything below has a working default and
 
 ### First-Run Checklist
 * Add at least one test search, and tick it to include it in the next session.
-* Choose the test type that matches the search's dataset. A search the current test cannot affect is shown as skipped, with what to change.
+* Choose the test type first. *Searches being timed* then lists only the selected searches of that type, and each search's Dataset list only that type's datasets. If none of that type is selected, the card offers your saved ones to pick from.
 * Run one window with a few repetitions first to check the search, then the full set.
 
 ### Comparing Lakehouse with federated
@@ -138,7 +138,7 @@ This app is built by Cribl Solutions Engineering for performance testing, demos 
 Possible causes:
 * Missing permissions: resizing needs engine write access, and searching needs search access.
 * No test searches yet, or none selected.
-* The selected searches don't match the test type. The workbench marks them as skipped and says what to change.
+* No search of the current test type is selected. The workbench offers your saved searches of that type, or you can add one in **Test searches**.
 
 ### The App Cannot Connect To An API Or Service
 Check:

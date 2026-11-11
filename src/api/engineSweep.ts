@@ -150,10 +150,10 @@ export function validateSweep(input: {
   // empty column that reads like a measurement nobody took.
   const empty = (steps ?? []).filter((step) => step.searches === 0);
   if (empty.some((step) => isFederated(step.tier))) {
-    return 'None of the selected searches reads a federated dataset, so a federated test has nothing to run. Pick one from a search’s Dataset list, under a “Federated” group.';
+    return 'No federated search is selected, so a federated test has nothing to run. Choose one under Searches being timed.';
   }
   if (empty.length) {
-    return 'Every selected search reads remote data, which no engine size affects, so a Lakehouse test has nothing to run. Pick a Lakehouse dataset on a search, or switch to Federated search.';
+    return 'No Lakehouse search is selected, so a Lakehouse test has nothing to run. Choose one under Searches being timed.';
   }
   return null;
 }

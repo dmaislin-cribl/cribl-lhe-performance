@@ -314,9 +314,12 @@ export default function DocsPage() {
             <b>The dataset decides where a search runs, not this app.</b> Nothing sent with a
             search says &ldquo;run this federated&rdquo;. So before a run, each selected search is
             sorted using the dataset catalog. A Lakehouse test runs only the searches over
-            Lakehouse datasets, and a federated test runs only the searches over remote ones. A
-            search the current test will not run stays on the card, marked as skipped, with what to
-            change. A search that names both kinds, a wildcard, or nothing the catalog knows runs in
+            Lakehouse datasets, and a federated test runs only the searches over remote ones, so{' '}
+            <b>Searches being timed</b> lists only the selected searches of the current type. Ones
+            of the other type are hidden, and counted underneath. When none of the current type is
+            selected, the card offers your saved searches of that type to choose from. Each
+            search&rsquo;s Dataset list likewise offers only datasets of the current type. A search
+            that names both kinds, a wildcard, or nothing the catalog knows runs in
             either test, and each run is filed by where the server says it executed.
           </li>
           <li>

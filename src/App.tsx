@@ -30,6 +30,7 @@ import { copyToClipboard, provenanceBlock, runsToCsv } from './api/exportResults
 import {
   MAX_SELECTED,
   deriveDataset,
+  isRunnable,
   loadLibrary,
   retargetSearch,
   saveLibrary,
@@ -792,6 +793,22 @@ export default function App() {
     [searchesForTarget, federatedMode, activeTier],
   );
 
+  const kindLabel = federatedMode ? 'federated' : 'Lakehouse';
+  const otherKindLabel = federatedMode ? 'Lakehouse' : 'federated';
+  /** Selected searches of the other test type: not shown, but counted, so none seem lost. */
+  const hiddenCount = chosen.length - runnable.length;
+  /** Saved, unselected searches this test type can run — offered when none is selected. */
+  const candidates = useMemo(() => {
+    if (!library) return [];
+    const target = federatedMode ? FEDERATED : activeTier;
+    return library.searches.filter(
+      (search) =>
+        isRunnable(search) &&
+        !library.selectedIds.includes(search.id) &&
+        runsOnTarget(classifySearch(search.text, catalog), target),
+    );
+  }, [library, federatedMode, activeTier, catalog]);
+
   const summary = useMemo(() => {
     // Only what this test runs: a skipped search would sit in the table as
     // "Not run yet" forever, which reads as a run still to come.
@@ -952,6 +969,36 @@ export default function App() {
         searchCount: Math.max(1, runnable.length),
       }),
     [sweepTiers, runnable.length],
+  );
+
+  /**
+   * Select a search for this test type. When the selection is full, a selected
+   * search of the *other* type gives up its place — it would not run here
+   * anyway. If every slot holds one of this type, say so instead.
+   */
+  const selectForMode = useCallback(
+    async (id: string) => {
+      if (!library) return;
+      let selectedIds = library.selectedIds;
+      if (selectedIds.length >= MAX_SELECTED) {
+        const runnableIds = new Set(runnable.map((search) => search.id));
+        const evict = selectedIds.find((entry) => !runnableIds.has(entry));
+        if (!evict) {
+          setError(`${MAX_SELECTED} searches are already selected. Deselect one in Manage searches first.`);
+          return;
+        }
+        selectedIds = selectedIds.filter((entry) => entry !== evict);
+      }
+      const next: SearchLibrary = { ...library, selectedIds: [...selectedIds, id] };
+      setLibrary(next);
+      try {
+        await saveLibrary(next);
+        setError('');
+      } catch (cause) {
+        setError(`Could not save the selection: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    },
+    [library, runnable],
   );
 
   /** Switch test type. Persisted: an operator running federated tests keeps doing so. */
@@ -1175,20 +1222,38 @@ export default function App() {
             </div>
           )}
 
-          {library && library.searches.length > 0 && !chosen.length && (
+          {/* Nothing of this test type is selected: offer the saved searches that
+              are, one click each, instead of a card of searches that would not run. */}
+          {library && library.searches.length > 0 && !runnable.length && (
             <div className={s.empty}>
               <p>
-                <b>Nothing selected to run.</b> {library.searches.length}{' '}
-                {library.searches.length === 1 ? 'search is' : 'searches are'} saved — tick up to{' '}
-                {MAX_SELECTED} of them to measure.
+                <b>No {kindLabel} search selected.</b>{' '}
+                {candidates.length
+                  ? `Choose one to time${candidates.length > 1 ? ` — up to ${MAX_SELECTED}` : ''}:`
+                  : `None of your saved searches reads a ${kindLabel} dataset yet. Add one in Manage searches.`}
               </p>
+              {candidates.length > 0 && (
+                <ul className={s.candidateList}>
+                  {candidates.map((search) => (
+                    <li key={search.id}>
+                      <span>
+                        <b>{search.name}</b>
+                        <small className={s.mono}>{deriveDataset(search.text) || 'no dataset term'}</small>
+                      </span>
+                      <button disabled={running} onClick={() => void selectForMode(search.id)}>
+                        Select
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <Link className={s.linkButton} to="/searches">
-                Choose searches
+                Manage searches
               </Link>
             </div>
           )}
 
-          {chosen.map((search) => {
+          {runnable.map((search) => {
             const placement = placements.get(search.id) ?? 'unknown';
             const current = deriveDataset(search.text);
             // Offered = valid for this test type. A dataset of the other kind is
@@ -1197,9 +1262,8 @@ export default function App() {
             const otherKind = catalog?.has(current) && !offered
               ? (classifyDataset(catalog, current) === 'lakehouse' ? 'Lakehouse' : 'federated')
               : null;
-            const skipped = !runnable.some((entry) => entry.id === search.id);
             return (
-            <div className={`${s.searchItem} ${skipped ? s.searchSkipped : ''}`} key={search.id}>
+            <div className={s.searchItem} key={search.id}>
               <div className={s.searchName}>
                 <b>{search.name}</b>
                 <span className={s.tag} title={PLACEMENT_HINT[placement]}>
@@ -1241,14 +1305,7 @@ export default function App() {
               ) : (
                 <span className={s.muted}>{current || 'no dataset term'}</span>
               )}
-              {skipped && (
-                <span className={s.skipNote}>
-                  {federatedMode
-                    ? 'Skipped in a federated test: this reads a Lakehouse dataset. Pick a dataset under a “Federated” group, or switch to Lakehouse engine sizes.'
-                    : 'Skipped in a Lakehouse test: this reads remote data, which no engine size affects. Pick a Lakehouse dataset, or switch to Federated search.'}
-                </span>
-              )}
-              {!skipped && placement === 'unknown' && (
+              {placement === 'unknown' && (
                 <span className={s.muted}>
                   Can&rsquo;t tell from the catalog where this runs, so it runs, and each run is filed
                   by where the server says it executed.
@@ -1267,6 +1324,14 @@ export default function App() {
             </div>
             );
           })}
+
+          {/* Said, so selected searches never seem to vanish when switching type. */}
+          {hiddenCount > 0 && (
+            <p className={s.muted}>
+              {hiddenCount} selected {otherKindLabel} {hiddenCount === 1 ? 'search is' : 'searches are'}{' '}
+              hidden — {hiddenCount === 1 ? 'it runs' : 'they run'} in a {otherKindLabel} test.
+            </p>
+          )}
 
           <div className={s.boundsNote}>
             <b>{selectedDef.id}</b> bounds if started now: <span className={s.mono}>{previewBounds}</span>
@@ -1309,9 +1374,8 @@ export default function App() {
                 </>
               ) : (
                 <>
-                  <b>Nothing to run yet.</b> None of the selected searches reads a federated dataset.
-                  Pick one from a search&rsquo;s <b>Dataset</b> list, under a &ldquo;Federated&rdquo;
-                  group.
+                  <b>Nothing to run yet.</b> No federated search is selected — choose one under{' '}
+                  <b>Searches being timed</b>.
                 </>
               )}
             </p>
@@ -1468,9 +1532,8 @@ export default function App() {
               </>
             ) : (
               <>
-                <b>Nothing to run on an engine.</b> Every selected search reads remote data, which no
-                engine size affects. Pick a Lakehouse dataset on a search, or switch to{' '}
-                <b>Federated search</b> above.
+                <b>Nothing to run yet.</b> No Lakehouse search is selected — choose one under{' '}
+                <b>Searches being timed</b>.
               </>
             )}
           </p>

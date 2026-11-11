@@ -178,7 +178,7 @@ describe('federated target', () => {
       runsPerWindow: [4],
     });
     expect(validateSweep({ selected: ['medium', 'federated'], hasSearches: true, steps: plan.steps })).toMatch(
-      /federated test has nothing to run/,
+      /No federated search is selected/,
     );
     const sizesOnly = planSweep({
       selected: ['medium'],
@@ -188,7 +188,7 @@ describe('federated target', () => {
       runsPerWindow: [4],
     });
     expect(validateSweep({ selected: ['medium'], hasSearches: true, steps: sizesOnly.steps })).toMatch(
-      /Lakehouse test has nothing to run/,
+      /No Lakehouse search is selected/,
     );
   });
 });

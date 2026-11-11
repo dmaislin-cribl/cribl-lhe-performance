@@ -117,9 +117,11 @@ table { width:100%; border-collapse:collapse; font-size:13px; }th { text-align:l
 .datasetPick label { margin: 0; font-size: 12px; color: var(--cds-color-fg-muted); }
 .datasetPick select { padding: 6px 8px; font-size: 13px; }
 
-/* A selected search the current test will not run: visibly set aside, with the reason. */
-.searchSkipped { opacity: .72; }
-.skipNote { display: block; font-size: 12px; color: var(--cds-color-warning); margin-bottom: 8px; }
+/* Saved searches of the current test type, offered when none is selected. */
+.candidateList { list-style: none; margin: 0 0 14px; padding: 0; text-align: left; display: grid; gap: 6px; }
+.candidateList li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--cds-color-border-subtle); border-radius: 4px; }
+.candidateList small { display: block; }
+.candidateList button { padding: 5px 10px; font-size: 12px; }
 
 .federatedCard { border-top: 3px solid var(--chart-federated); }
 .factList { margin: 14px 0 0; display: grid; gap: 10px; font-size: 13px; line-height: 1.5; }
