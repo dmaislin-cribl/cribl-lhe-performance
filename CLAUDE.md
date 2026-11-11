@@ -74,7 +74,14 @@ tarball for the version it read first, which no longer matches, and the
 deploy always fails with `pack identity … does not match package.json`.
 The scripts package first and pass the exact artifact with `--artifact`,
 which also skips the tool's own `verify`, so the scripts run `verify`
-themselves. The deploy target comes from `CRIBL_BASE_URL` in `.env` or
+themselves.
+
+They also **set the version before packaging**. `apps package` builds
+first and bumps afterwards, so a plain `apps package` bakes the
+*previous* version into the bundle — the header and every clipboard
+export then show one version behind the installed pack. The scripts
+write the target version to `package.json` first and pass the same
+value to `apps package --version`, so it does not bump again. The deploy target comes from `CRIBL_BASE_URL` in `.env` or
 the environment.
 
 **Strict mode is deliberately off.** `package.json` ships
@@ -118,12 +125,13 @@ tag, in a clean working tree:
 npm run lint          # must pass — what the workflow gates on
 npm test              # unit tests
 npx tsc --noEmit      # type-check
-npm run package -- --version X.Y.Z   # full build + tgz, at the version you will tag
+npm pkg set version=X.Y.Z && npm run package -- --version X.Y.Z
 ```
 
 Plain `npm run package` bumps the patch version, so after it
-`package.json` no longer matches the tag you meant to push — pass
-`--version` with the target version instead.
+`package.json` no longer matches the tag you meant to push — and it
+builds before bumping, so the bundle would show the old version. Set the
+version first, then package at that same version.
 
 If any step fails, do not tag. Fix on `master` first.
 
