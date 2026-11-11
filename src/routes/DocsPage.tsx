@@ -40,6 +40,8 @@ const SECTIONS: Section[] = [
   { id: 'windows', title: 'Time windows' },
   { id: 'repetitions', title: 'Repetitions and the statistics they buy' },
   { id: 'sizes', title: 'Engine sizes and sweeps' },
+  { id: 'federated', title: 'Federated search' },
+  { id: 'results', title: 'Seeing what a search returned' },
   { id: 'sessions', title: 'Sessions and reading results' },
   { id: 'analysis', title: 'Analysis: is the difference real?' },
   { id: 'defensible', title: 'Before you show a customer' },
@@ -62,12 +64,13 @@ export default function DocsPage() {
     <div className={s.page}>
       <div className={s.head}>
         <div>
-          <h1>How this lab works</h1>
+          <h1>How Cribl Performance Testing works</h1>
           <p className={s.intro}>
-            A Lakehouse Engine performance lab: it runs the same saved searches over a fixed set of
-            time windows, repeatedly, on one or more engine sizes, and reports how long each one
-            took — with enough provenance that the numbers survive being pasted into a customer
-            deck. This page is the reasoning behind the readouts. Every threshold quoted below is
+            Cribl Performance Testing runs the same saved searches over a fixed set of time
+            windows, repeatedly, and reports how long each one took. It runs two kinds of test:
+            Lakehouse searches on one or more engine sizes, and federated searches over data that
+            stays in S3, Azure Blob, GCS, Cribl Lake and other remote stores. Every figure carries
+            enough provenance to survive being pasted into a customer deck. This page is the reasoning behind the readouts. Every threshold quoted below is
             read from the code that enforces it, so it cannot drift out of date.
           </p>
         </div>
@@ -280,6 +283,116 @@ export default function DocsPage() {
             largest size does not leave capacity parked at the top until somebody notices.
           </li>
         </ul>
+      </section>
+
+      <section className={s.block} id="federated">
+        <h2>Federated search</h2>
+        <p>
+          The workbench runs one of two tests, chosen at the top: <b>Lakehouse engine sizes</b>{' '}
+          or <b>Federated search</b>. A federated test measures searches over data that stays
+          where it is (S3, Azure Blob, GCS, Cribl Lake, Edge, API and Log Analytics datasets). Those
+          searches run on Cribl Search&rsquo;s federated executors, not on a Lakehouse engine. In
+          this mode the engine controls disappear, nothing is resized, and engine size plays no
+          part in the figures.
+        </p>
+        <ol>
+          <li>Choose <b>Federated search</b> at the top of the workbench.</li>
+          <li>
+            On each search under <b>Searches being timed</b>, pick the <b>Dataset</b> to test. The
+            list groups your workspace&rsquo;s datasets by where they live: Lakehouse, then
+            Federated by storage type (Amazon S3, Azure Blob Storage, Google Cloud Storage, Cribl
+            Lake …).
+          </li>
+          <li>Pick a time window and press <b>Time</b>.</li>
+        </ol>
+        <p>
+          On <b>Test searches</b>, each saved search is tagged Lakehouse or Federated from the
+          dataset it names, and the list can be filtered to either kind. When writing a search,
+          pick its dataset from the grouped <b>Dataset</b> list instead of typing it. The list
+          follows the filter, so filtering to Federated offers only federated datasets.
+        </p>
+        <p>
+          Federated search runs on two engines, <b>v1</b> and the newer <b>v2</b>. Each federated
+          dataset and search is labelled with its version, and under Federated the list can be
+          narrowed to v1 or v2. Built-in datasets that declare no version (Cribl Edge, the
+          internal logs, <code>cribl_search_sample</code>) run on v1 according to their own job
+          records, so they are labelled v1. The <b>Version</b> column in the results is not read
+          from the catalog: it is what each run&rsquo;s job record says the server used.
+        </p>
+        <p>
+          Changing a search&rsquo;s dataset edits the search, unless it already has measured runs.
+          Then a copy named for the new dataset takes its place, and the original keeps its runs.
+          Otherwise Analysis would pool timings from two datasets under one search.
+        </p>
+        <ul>
+          <li>
+            <b>The dataset decides where a search runs, not this app.</b> Nothing sent with a
+            search says &ldquo;run this federated&rdquo;. So before a run, each selected search is
+            sorted using the dataset catalog. A Lakehouse test runs only the searches over
+            Lakehouse datasets, and a federated test runs only the searches over remote ones, so{' '}
+            <b>Searches being timed</b> lists only the selected searches of the current type. Ones
+            of the other type are hidden, and counted underneath. When none of the current type is
+            selected, the card offers your saved searches of that type to choose from. Each
+            search&rsquo;s Dataset list likewise offers only datasets of the current type. A search
+            that names both kinds, a wildcard, or nothing the catalog knows runs in
+            either test, and each run is filed by where the server says it executed.
+          </li>
+          <li>
+            <b>The server&rsquo;s account files the run.</b> After every run the app reads the
+            job record. If it reports federated compute (<code>v1</code>/<code>v2</code>), the
+            run is filed under Federated. If it reports Lakehouse compute (<code>local</code>), the
+            run is filed under the size the engine was on. A catalog that was wrong never puts a
+            measurement in the wrong column, and the run&rsquo;s notes say when the filing differed
+            from the plan.
+          </li>
+          <li>
+            <b>Cost is recorded with time.</b> Federated searches are billed per CPU-second, so each
+            run records <b>billable CPU</b>, the number of <b>executors</b> it fanned out to, the
+            provider and compute version, and whether the cache was hit. Lakehouse runs report 0
+            billable CPU, because Lakehouse is billed by engine size. Analysis can use billable
+            CPU as its metric, so the significance test applies to cost as well as speed. Start-up
+            costs money too: the S3 run that waited cost 60&nbsp;CPU-seconds, against about 20
+            for each warm run after it.
+          </li>
+          <li>
+            <b>Waiting for compute is measured, not hidden.</b> While a federated job runs, it
+            reports how many compute nodes it is still waiting for. The count resets to zero once
+            the job finishes, so the app samples it on every status check and records how long
+            each run waited. That wait is the largest single source of federated variance: one
+            measured S3 search took 29.5&nbsp;s on its first run and about 1.1&nbsp;s afterwards.
+            The usual warm-up run absorbs most of it. In Analysis, <b>Compute wait</b> can exclude
+            runs that waited, or show only them so you can measure start-up latency on purpose.
+            The wait is sampled about twice a second, so a shorter wait can be missed. Lakehouse
+            and compute v1 jobs do not report it, and the app records them as &ldquo;not
+            reported&rdquo;, never as &ldquo;no wait&rdquo;.
+          </li>
+          <li>
+            <b>Comparing Lakehouse with federated</b> takes two saved searches, one for each copy
+            of the data (for example a Lakehouse dataset and the S3 bucket it was archived from).
+            Analysis and Compare look at one search at a time, so link the two first: open either
+            one on <b>Manage searches</b> and set its <b>Counterpart</b> to the other. Select both,
+            then run one session as a Lakehouse test and one as a federated test. Each test
+            runs only its half of the pair. In Analysis or Compare (all sessions), pick either
+            search and leave <b>Include counterpart</b> on. The pair is then read as one case:
+            each target&rsquo;s figures come from whichever search ran there, and the two are
+            never blended. Set <b>Compare against</b> to Federated (or to a size) to get the
+            head-to-head. If the two copies matched different numbers of events, both views say
+            so, because then the two searches did different work and the timings aren&rsquo;t a
+            like-for-like comparison.
+          </li>
+        </ul>
+      </section>
+
+      <section className={s.block} id="results">
+        <h2>Seeing what a search returned</h2>
+        <p>
+          Every run in <b>Every run</b> has a <b>View</b> button. It fetches the rows that run
+          returned from the server (the first 100, up to 30 columns) and shows them with the total
+          row count. <b>Copy rows (CSV)</b> puts them on the clipboard. The app stores no results
+          itself, so the run history stays small. The server keeps a job&rsquo;s results for a
+          while and then expires them, and the viewer then says so; re-run the search to see them
+          again.
+        </p>
       </section>
 
       <section className={s.block} id="sessions">

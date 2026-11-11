@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiUrl } from './api/cribl';
-import { PerfRunError, runTimedQuery } from './api/perfRun';
+import { PerfRunError, parseResultsPayload, runTimedQuery, searchBase } from './api/perfRun';
 import { formatBounds, resolveWindows, type WindowDef } from './api/windows';
 import { P95_MIN_SAMPLES, countsAgree, formatSec, summarizeSamples } from './api/stats';
 import {
@@ -16,6 +16,7 @@ import {
   type LabConfig,
   type RunLog,
   type RunRecord,
+  type TestMode,
 } from './api/appSettings';
 import {
   type SweepPlan,
@@ -25,24 +26,44 @@ import {
   planSweep,
   validateSweep,
 } from './api/engineSweep';
-import { copyToClipboard, provenanceBlock, runsToCsv } from './api/exportResults';
+import { copyToClipboard, provenanceBlock, runsToCsv, toCsv } from './api/exportResults';
 import {
   MAX_SELECTED,
   deriveDataset,
+  isRunnable,
   loadLibrary,
+  retargetSearch,
+  saveLibrary,
   selectedSearches,
   type SavedSearch,
   type SearchLibrary,
 } from './api/searches';
 import {
   BASELINE_TIER,
+  FEDERATED,
   canonicalTier,
   describeTier,
+  isFederated,
   labelTier,
   mergeDiscoveredTiers,
   tierDef,
   tierIndex,
 } from './api/tiers';
+import {
+  attributeRun,
+  classifyDataset,
+  classifySearch,
+  describeCompute,
+  groupDatasets,
+  waitedForCompute,
+  PLACEMENT_HINT,
+  PLACEMENT_LABEL,
+  datasetOptionLabel,
+  federatedVersions,
+  runsOnTarget,
+  searchVersion,
+  type SearchPlacement,
+} from './api/federated';
 import {
   MAX_SESSION_NAME,
   endSession,
@@ -52,6 +73,7 @@ import {
   upsertSession,
   type SessionRecord,
 } from './api/sessions';
+import { useDatasetCatalog } from './api/useDatasetCatalog';
 import s from './App.module.css';
 
 interface Engine {
@@ -78,6 +100,17 @@ const RESIZE_TIMEOUT_MS = 30 * 60_000;
 
 /** Per-resize allowance in the wall-clock estimate. Deliberately pessimistic. */
 const RESIZE_SETTLE_SEC = 180;
+
+/** Rows fetched for the results viewer. A look at the output, not an export of it. */
+const RESULTS_LIMIT = 100;
+/** Columns shown; a wide raw event can carry hundreds of fields. */
+const RESULT_COLUMNS_LIMIT = 30;
+
+/** One cell of the results viewer: objects as JSON, long values cut short. */
+function resultCell(value: unknown): string {
+  const text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+}
 
 function runId(): string {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
@@ -144,6 +177,14 @@ export default function App() {
     null,
   );
   const [pendingClear, setPendingClear] = useState(false);
+  /** The run whose returned rows are being viewed, or null. */
+  const [resultsView, setResultsView] = useState<{
+    run: RunRecord;
+    loading: boolean;
+    rows: Record<string, unknown>[];
+    total: number | null;
+    error: string;
+  } | null>(null);
   const [previewAnchor, setPreviewAnchor] = useState(0);
   const [refreshingEngines, setRefreshingEngines] = useState(false);
   /**
@@ -176,6 +217,13 @@ export default function App() {
     [engines],
   );
   const searchGroup = config.searchGroup;
+  /**
+   * Dataset catalog, used to sort selected searches into Lakehouse and federated
+   * before a run. Null until loaded, or when the read failed — in which case
+   * every search is "unknown", runs on every target, and is attributed from the
+   * server's job record afterwards.
+   */
+  const catalog = useDatasetCatalog(searchGroup);
   const chosen = useMemo(() => (library ? selectedSearches(library) : []), [library]);
 
   /**
@@ -196,6 +244,20 @@ export default function App() {
   const shownRuns = useMemo(
     () => (runFilter ? runs.filter((run) => run.sessionId === runFilter) : runs),
     [runs, runFilter],
+  );
+
+  /** Where each selected search is expected to run. */
+  const placements = useMemo(() => {
+    const map = new Map<string, SearchPlacement>();
+    for (const search of chosen) map.set(search.id, classifySearch(search.text, catalog));
+    return map;
+  }, [chosen, catalog]);
+
+  /** Selected searches a target should run — see `runsOnTarget`. */
+  const searchesForTarget = useCallback(
+    (target: string) =>
+      chosen.filter((search) => runsOnTarget(placements.get(search.id) ?? 'unknown', target)),
+    [chosen, placements],
   );
 
   useEffect(() => {
@@ -417,6 +479,8 @@ export default function App() {
       window: ReturnType<typeof resolveWindows>[number],
       measured: boolean,
       tier: string,
+      /** The Lakehouse size the engine is on now, for runs the server says ran locally. */
+      engineTier: string,
       session: SessionRecord,
       signal: AbortSignal,
     ) => {
@@ -449,9 +513,14 @@ export default function App() {
           searchGroup: config.searchGroup,
           signal,
         });
+        const { insight, computeWait } = result;
+        // Filed by what the server says ran, not by what was planned — a size
+        // sweep that launched an S3 search must not record it as a size.
+        const attributed = attributeRun({ planned: tier, path: insight.path, engineTier });
         appendRun(
           {
             ...base,
+            engine: attributed.target,
             jobId: result.jobId,
             totalMs: result.totalMs,
             engineMs: result.engineMs,
@@ -459,7 +528,19 @@ export default function App() {
             clientMs: Math.round(result.clientMs),
             totalEventCount: result.totalEventCount,
             status: 'Success',
-            notes: measured ? '' : 'Warm-up',
+            notes: [measured ? '' : 'Warm-up', attributed.note].filter(Boolean).join(' · '),
+            path: insight.path,
+            billableCpuMs: insight.billableCpuMs,
+            totalCpuMs: insight.totalCpuMs,
+            executors: insight.executors,
+            // Null, not zero, when the job never reported node statuses: a v1 or
+            // Lakehouse job did not "wait 0 s", it just did not say.
+            computeCold: computeWait.reported ? computeWait.peakCold : null,
+            computeWarm: computeWait.reported ? computeWait.peakWarm : null,
+            computeWaitMs: computeWait.reported ? computeWait.waitMs : null,
+            providerTypes: insight.providerTypes,
+            computeTypes: insight.computeTypes,
+            cache: insight.cache,
           },
           query,
         );
@@ -524,7 +605,10 @@ export default function App() {
           log.sessions,
           sessionName.trim() ||
             suggestSessionName({
-              tier: sweeping ? `${plan.steps.length} sizes` : labelTier(plan.steps[0].tier),
+              // "Targets" once Federated is in the plan: it is not a size.
+              tier: sweeping
+                ? `${plan.steps.length} ${plan.steps.some((step) => isFederated(step.tier)) ? 'targets' : 'sizes'}`
+                : labelTier(plan.steps[0].tier),
               windowCount: resolved.length,
               searchCount: chosen.length,
             }),
@@ -541,7 +625,7 @@ export default function App() {
         windowRepetitions: Object.fromEntries(
           resolved.map((window) => [window.id, repetitionsFor(config, window.id)]),
         ),
-        notes: sweeping ? `Engine size sweep: ${describeSweep(plan)}` : '',
+        notes: sweeping ? `Sweep: ${describeSweep(plan)}` : '',
       });
       writeSession(session);
       // Cleared so the next session gets a fresh suggestion rather than silently
@@ -562,20 +646,22 @@ export default function App() {
             await requestResize(target!.id, step.tier);
             await awaitTier(target!.id, step.tier, controller.signal);
           }
-          currentTier = step.tier;
-          for (const search of chosen) {
+          // Federated does not move the engine, so the size it is on stays the
+          // one the restore below compares against.
+          if (!isFederated(step.tier)) currentTier = step.tier;
+          for (const search of searchesForTarget(step.tier)) {
             for (const window of resolved) {
               setProgress(
-                `${session.name} · ${stepLabel}${search.name} · ${window.id} on ${labelTier(step.tier)} · warm-up (${done}/${plan.totalRuns} searches run)`,
+                `${session.name} · ${stepLabel}${search.name} · ${window.id} on ${labelTier(step.tier)} · warm-up (${done}/${plan.totalRuns} runs done)`,
               );
-              await runOnce(search, window, false, step.tier, session, controller.signal);
+              await runOnce(search, window, false, step.tier, currentTier, session, controller.signal);
               done += 1;
               const timed = repetitionsFor(config, window.id);
               for (let repetition = 0; repetition < timed; repetition += 1) {
                 setProgress(
                   `${session.name} · ${stepLabel}${search.name} · ${window.id} on ${labelTier(step.tier)} · run ${repetition + 1} of ${timed} (${done}/${plan.totalRuns} total)`,
                 );
-                await runOnce(search, window, true, step.tier, session, controller.signal);
+                await runOnce(search, window, true, step.tier, currentTier, session, controller.signal);
                 done += 1;
               }
             }
@@ -583,7 +669,13 @@ export default function App() {
         }
         closeSession(session.id, 'complete');
         setMessage(
-          `“${session.name}” finished: ${chosen.length} ${chosen.length === 1 ? 'search' : 'searches'} × ${resolved.length} ${resolved.length === 1 ? 'window' : 'windows'} on ${plan.steps.map((step) => labelTier(step.tier)).join(', ')}. Open Analysis to see whether the differences between those sizes are real.`,
+          `“${session.name}” finished: ${chosen.length} ${chosen.length === 1 ? 'search' : 'searches'} × ${resolved.length} ${resolved.length === 1 ? 'window' : 'windows'} on ${plan.steps.map((step) => labelTier(step.tier)).join(', ')}. ${
+            plan.steps.length > 1
+              ? 'Open Analysis to see whether the differences between those sizes are real.'
+              : isFederated(plan.steps[0].tier)
+                ? 'Open Analysis for the distribution, billable CPU and compute waits.'
+                : 'Open Analysis for the distribution.'
+          }`,
         );
       } catch (cause) {
         if (controller.signal.aborted) {
@@ -631,6 +723,7 @@ export default function App() {
       log.sessions,
       requestResize,
       runOnce,
+      searchesForTarget,
       sessionName,
       writeSession,
     ],
@@ -663,9 +756,18 @@ export default function App() {
    */
   const windows = config.windows;
 
+  /**
+   * The workbench does one kind of test at a time — see LabConfig.testMode. The
+   * results table follows it: a federated test shows federated runs, a
+   * Lakehouse test shows the size the engine is on now.
+   */
+  const federatedMode = config.testMode === 'federated';
+  const shownTarget = federatedMode ? FEDERATED : activeTier;
+  const showingFederated = federatedMode;
+
   const measured = useMemo(
-    () => runs.filter((run) => run.measured && run.engine === activeTier),
-    [runs, activeTier],
+    () => runs.filter((run) => run.measured && run.engine === shownTarget),
+    [runs, shownTarget],
   );
 
   /**
@@ -673,8 +775,32 @@ export default function App() {
    * end-to-end time the server reported, split into queue and engine so a slow
    * result can be attributed without needing the distribution columns.
    */
+  /** Selected searches this test will actually run — the rest are skipped, and say why. */
+  const runnable = useMemo(
+    () => searchesForTarget(federatedMode ? FEDERATED : activeTier),
+    [searchesForTarget, federatedMode, activeTier],
+  );
+
+  const kindLabel = federatedMode ? 'federated' : 'Lakehouse';
+  const otherKindLabel = federatedMode ? 'Lakehouse' : 'federated';
+  /** Selected searches of the other test type: not shown, but counted, so none seem lost. */
+  const hiddenCount = chosen.length - runnable.length;
+  /** Saved, unselected searches this test type can run — offered when none is selected. */
+  const candidates = useMemo(() => {
+    if (!library) return [];
+    const target = federatedMode ? FEDERATED : activeTier;
+    return library.searches.filter(
+      (search) =>
+        isRunnable(search) &&
+        !library.selectedIds.includes(search.id) &&
+        runsOnTarget(classifySearch(search.text, catalog), target),
+    );
+  }, [library, federatedMode, activeTier, catalog]);
+
   const summary = useMemo(() => {
-    return chosen.flatMap((search) =>
+    // Only what this test runs: a skipped search would sit in the table as
+    // "Not run yet" forever, which reads as a run still to come.
+    return runnable.flatMap((search) =>
       windows.map((def) => {
         const forRow = measured.filter((run) => run.searchId === search.id && run.window === def.id);
         const ok = forRow.filter((run) => run.status === 'Success');
@@ -690,6 +816,13 @@ export default function App() {
           total: summarizeSamples(totals),
           engineMedian: medianOf(ok.map((run) => run.engineMs)),
           queueMedian: medianOf(ok.map((run) => run.queueMs)),
+          cpuMedian: medianOf(ok.map((run) => run.billableCpuMs ?? null)),
+          executorsMedian: medianOf(ok.map((run) => run.executors ?? null)),
+          // Counted only where the server reported node statuses at all.
+          coldRuns: ok.filter((run) => waitedForCompute(run.computeWaitMs) === true).length,
+          coldKnown: ok.filter((run) => waitedForCompute(run.computeWaitMs) !== null).length,
+          // What the server ran it on, from the runs themselves — never from the catalog.
+          version: [...new Set(ok.map((run) => federatedVersions(run.computeTypes)).filter(Boolean))].join(', '),
           errors: forRow.length - ok.length,
           consistent: countsAgree(counts),
           eventCount: counts.find((value) => typeof value === 'number') ?? null,
@@ -705,7 +838,7 @@ export default function App() {
         };
       }),
     );
-  }, [chosen, measured, windows]);
+  }, [runnable, measured, windows]);
 
   /**
    * Timed runs one engine size needs for full coverage: the sum across windows,
@@ -743,15 +876,29 @@ export default function App() {
     [selectedDef, previewAnchor],
   );
 
-  const plannedRuns = chosen.length * (repetitionsFor(config, selectedDef.id) + 1);
+  const plannedRuns = runnable.length * (repetitionsFor(config, selectedDef.id) + 1);
+  /**
+   * Only the datasets the current test type can run: a federated test is never
+   * offered a Lakehouse dataset, and a Lakehouse test never a federated one.
+   */
+  const datasetGroups = useMemo(
+    () => groupDatasets(catalog, federatedMode ? 'federated' : 'lakehouse'),
+    [catalog, federatedMode],
+  );
+  /** Every dataset this picker offers, for checking whether a search's current one is among them. */
+  const offeredDatasets = useMemo(
+    () => new Set(datasetGroups.flatMap((group) => group.ids)),
+    [datasetGroups],
+  );
 
   /**
    * Sizes the next run covers. Falls back to whatever the engine is on, so an
    * empty selection still runs something rather than doing nothing silently.
    */
   const sweepTiers = useMemo(
-    () => (config.sweepTiers.length ? config.sweepTiers : [activeTier]),
-    [config.sweepTiers, activeTier],
+    () =>
+      federatedMode ? [FEDERATED] : config.sweepTiers.length ? config.sweepTiers : [activeTier],
+    [federatedMode, config.sweepTiers, activeTier],
   );
 
   const planFor = useCallback(
@@ -760,9 +907,10 @@ export default function App() {
         selected: sweepTiers,
         currentTier: activeTier,
         searches: chosen.length,
+        searchesFor: (tier) => searchesForTarget(tier).length,
         runsPerWindow: defs.map((def) => repetitionsFor(config, def.id)),
       }),
-    [sweepTiers, activeTier, chosen.length, config],
+    [sweepTiers, activeTier, chosen.length, config, searchesForTarget],
   );
 
   /** Median of every timed run so far, used only for the wall-clock estimate. */
@@ -785,6 +933,7 @@ export default function App() {
       const problem = validateSweep({
         selected: plan.steps.map((step) => step.tier),
         hasSearches: chosen.length > 0,
+        steps: plan.steps,
       });
       if (problem) {
         setError(problem);
@@ -805,11 +954,126 @@ export default function App() {
   const suggestedName = useMemo(
     () =>
       suggestSessionName({
-        tier: labelTier(activeTier),
+        tier: sweepTiers.length === 1 ? labelTier(sweepTiers[0]) : `${sweepTiers.length} sizes`,
         windowCount: 1,
-        searchCount: Math.max(1, chosen.length),
+        searchCount: Math.max(1, runnable.length),
       }),
-    [activeTier, chosen.length],
+    [sweepTiers, runnable.length],
+  );
+
+  /**
+   * Select a search for this test type. When the selection is full, a selected
+   * search of the *other* type gives up its place — it would not run here
+   * anyway. If every slot holds one of this type, say so instead.
+   */
+  const selectForMode = useCallback(
+    async (id: string) => {
+      if (!library) return;
+      let selectedIds = library.selectedIds;
+      if (selectedIds.length >= MAX_SELECTED) {
+        const runnableIds = new Set(runnable.map((search) => search.id));
+        const evict = selectedIds.find((entry) => !runnableIds.has(entry));
+        if (!evict) {
+          setError(`${MAX_SELECTED} searches are already selected. Deselect one in Manage searches first.`);
+          return;
+        }
+        selectedIds = selectedIds.filter((entry) => entry !== evict);
+      }
+      const next: SearchLibrary = { ...library, selectedIds: [...selectedIds, id] };
+      setLibrary(next);
+      try {
+        await saveLibrary(next);
+        setError('');
+      } catch (cause) {
+        setError(`Could not save the selection: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    },
+    [library, runnable],
+  );
+
+  /**
+   * Fetch what a run's search returned, from the server, when asked.
+   *
+   * Not stored in the app: results can be large, the run log is one KV record,
+   * and the server already keeps each job's results for a while. The cost is
+   * that results expire server-side — the viewer says so rather than showing
+   * an empty table that would read as "the search found nothing".
+   */
+  const openResults = useCallback(async (run: RunRecord) => {
+    setResultsView({ run, loading: true, rows: [], total: null, error: '' });
+    try {
+      const response = await fetch(
+        `${apiUrl().replace(/\/$/, '')}${searchBase(run.searchGroup || config.searchGroup)}/jobs/${encodeURIComponent(run.jobId)}/results?offset=0&limit=${RESULTS_LIMIT}`,
+      );
+      if (response.status === 404) {
+        setResultsView({
+          run,
+          loading: false,
+          rows: [],
+          total: null,
+          error: 'The server no longer has results for this job — search results expire after a while. Re-run the search to see them.',
+        });
+        return;
+      }
+      if (!response.ok) throw new Error(`Reading results failed (${response.status})`);
+      const { header, rows } = parseResultsPayload(await response.text());
+      setResultsView({
+        run,
+        loading: false,
+        rows,
+        total: typeof header.totalEventCount === 'number' ? header.totalEventCount : null,
+        error: '',
+      });
+    } catch (cause) {
+      setResultsView({ run, loading: false, rows: [], total: null, error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }, [config.searchGroup]);
+
+  /** Columns for the results table: every key the rows carry, first-seen order, capped. */
+  const resultColumns = useMemo(() => {
+    const keys: string[] = [];
+    for (const row of resultsView?.rows ?? []) {
+      for (const key of Object.keys(row)) if (!keys.includes(key)) keys.push(key);
+    }
+    return keys.slice(0, RESULT_COLUMNS_LIMIT);
+  }, [resultsView]);
+
+  /** Switch test type. Persisted: an operator running federated tests keeps doing so. */
+  const setTestMode = useCallback((next: TestMode) => {
+    setConfig((current) => {
+      const updated: LabConfig = { ...current, testMode: next };
+      void saveConfig(updated);
+      return updated;
+    });
+    setError('');
+  }, []);
+
+  /**
+   * Point a selected search at another dataset from its picker. A search that
+   * already has measured runs is copied rather than edited — see
+   * `retargetSearch` for why editing it in place would corrupt Analysis.
+   */
+  const retarget = useCallback(
+    async (search: SavedSearch, datasetId: string) => {
+      if (!library || !datasetId) return;
+      const hasRuns = runs.some((run) => run.searchId === search.id && run.measured);
+      const result = retargetSearch(library, search.id, datasetId, hasRuns);
+      if (result.library === library) return;
+      setLibrary(result.library);
+      const created = result.library.searches.find((entry) => entry.id === result.searchId);
+      try {
+        await saveLibrary(result.library);
+        setError('');
+        setMessage(
+          result.copied
+            ? `“${search.name}” already has measured runs, so it was kept unchanged; a copy, “${created?.name}”, now runs against ${datasetId} in its place.`
+            : `“${search.name}” now runs against ${datasetId}.`,
+        );
+      } catch (cause) {
+        setError(`Could not save the dataset change: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    },
+    [library, runs],
   );
 
   return (
@@ -817,7 +1081,7 @@ export default function App() {
       <header className={s.header}>
         <div>
           <div className={s.eyebrow}>
-            SEARCH / PERFORMANCE LAB
+            CRIBL SEARCH / PERFORMANCE TESTING
             <span className={s.version} title={`app id: ${__APP_ID__}`}>
               v{__APP_VERSION__}
             </span>
@@ -826,10 +1090,16 @@ export default function App() {
           <p>
             Measures <b>how long each search takes, start to finish</b>, using the server&rsquo;s own
             clock rather than a browser stopwatch. Each time is split into waiting in the queue and
-            running on the engine. Every search runs several times so a single slow run cannot be
-            mistaken for the real figure.
+            execution. Every search runs several times so a single slow run cannot be mistaken for
+            the real figure.
           </p>
         </div>
+        {federatedMode ? (
+          <div className={s.engineBadge}>
+            <span className={`${s.dot} ${s.ready}`} />
+            Federated search · no engine used
+          </div>
+        ) : (
         <div className={s.engineBadge}>
           <span className={`${s.dot} ${engine?.status === 'ready' ? s.ready : ''}`} />
           {engine ? `${labelTier(engine.tierSize)} · ${engine.status}` : 'No engine selected'}
@@ -842,7 +1112,35 @@ export default function App() {
             {refreshingEngines ? 'Checking…' : 'Refresh'}
           </button>
         </div>
+        )}
       </header>
+
+      {/* Two different tests, chosen first, because everything below depends on
+          it: which searches run, whether an engine is involved, what is recorded. */}
+      <div className={s.modeBar} role="radiogroup" aria-label="What to test">
+        {(
+          [
+            ['lakehouse', 'Lakehouse engine sizes', 'Searches over Lakehouse datasets, timed on one or more engine sizes.'],
+            [
+              'federated',
+              'Federated search',
+              'Searches over remote data — S3, Azure Blob, GCS, Cribl Lake, Edge, APIs — on the federated executors. No engine is used.',
+            ],
+          ] as const
+        ).map(([value, title, detail]) => (
+          <button
+            key={value}
+            role="radio"
+            aria-checked={config.testMode === value}
+            className={`${s.modeOption} ${config.testMode === value ? s.modeActive : ''}`}
+            disabled={running}
+            onClick={() => setTestMode(value)}
+          >
+            <b>{title}</b>
+            <small>{detail}</small>
+          </button>
+        ))}
+      </div>
 
       {progress && <div className={s.notice}>{progress}</div>}
       {message && <div className={s.notice}>{message}</div>}
@@ -879,7 +1177,7 @@ export default function App() {
             ))}
           </select>
         </div>
-        {engines.length > 1 && (
+        {!federatedMode && engines.length > 1 && (
           <div>
             <label htmlFor="engine">Engine</label>
             <select
@@ -899,14 +1197,15 @@ export default function App() {
         <button
           className={s.primary}
           onClick={() => startRun([selectedDef])}
-          disabled={running || !chosen.length}
+          disabled={running || !runnable.length}
+          title={runnable.length ? undefined : 'None of the selected searches can run in this test — see the searches below.'}
         >
-          {running ? 'Running…' : `Time ${chosen.length} ${chosen.length === 1 ? 'search' : 'searches'}`}
+          {running ? 'Running…' : `Time ${runnable.length} ${runnable.length === 1 ? 'search' : 'searches'}`}
         </button>
         <button
           className={s.secondary}
           onClick={() => startRun(windows)}
-          disabled={running || !chosen.length}
+          disabled={running || !runnable.length}
         >
           All {windows.length} windows
         </button>
@@ -932,8 +1231,9 @@ export default function App() {
             <div>
               <h2>Searches being timed</h2>
               <span className={s.muted}>
-                {plannedRuns} searches per window ({repetitionsFor(config, selectedDef.id)} timed runs plus one warm-up
-                each)
+                {runnable.length
+                  ? `${plannedRuns} runs per window: ${repetitionsFor(config, selectedDef.id)} timed plus one warm-up for each of ${runnable.length} ${runnable.length === 1 ? 'search' : 'searches'}`
+                  : `Nothing selected runs in a ${federatedMode ? 'federated' : 'Lakehouse'} test — see below`}
               </span>
             </div>
             <Link className={s.tagLink} to="/searches">
@@ -959,28 +1259,118 @@ export default function App() {
             </div>
           )}
 
-          {library && library.searches.length > 0 && !chosen.length && (
+          {/* Nothing of this test type is selected: offer the saved searches that
+              are, one click each, instead of a card of searches that would not run. */}
+          {library && library.searches.length > 0 && !runnable.length && (
             <div className={s.empty}>
               <p>
-                <b>Nothing selected to run.</b> {library.searches.length}{' '}
-                {library.searches.length === 1 ? 'search is' : 'searches are'} saved — tick up to{' '}
-                {MAX_SELECTED} of them to measure.
+                <b>No {kindLabel} search selected.</b>{' '}
+                {candidates.length
+                  ? `Choose one to time${candidates.length > 1 ? ` — up to ${MAX_SELECTED}` : ''}:`
+                  : `None of your saved searches reads a ${kindLabel} dataset yet. Add one in Manage searches.`}
               </p>
+              {candidates.length > 0 && (
+                <ul className={s.candidateList}>
+                  {candidates.map((search) => (
+                    <li key={search.id}>
+                      <span>
+                        <b>{search.name}</b>
+                        <small className={s.mono}>{deriveDataset(search.text) || 'no dataset term'}</small>
+                      </span>
+                      <button disabled={running} onClick={() => void selectForMode(search.id)}>
+                        Select
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <Link className={s.linkButton} to="/searches">
-                Choose searches
+                Manage searches
               </Link>
             </div>
           )}
 
-          {chosen.map((search) => (
+          {runnable.map((search) => {
+            const placement = placements.get(search.id) ?? 'unknown';
+            const current = deriveDataset(search.text);
+            // Offered = valid for this test type. A dataset of the other kind is
+            // shown as a placeholder naming what it is, not as a selection.
+            const offered = offeredDatasets.has(current);
+            const otherKind = catalog?.has(current) && !offered
+              ? (classifyDataset(catalog, current) === 'lakehouse' ? 'Lakehouse' : 'federated')
+              : null;
+            return (
             <div className={s.searchItem} key={search.id}>
               <div className={s.searchName}>
                 <b>{search.name}</b>
-                <span className={s.muted}>{deriveDataset(search.text) || 'no dataset term'}</span>
+                <span className={s.tag} title={PLACEMENT_HINT[placement]}>
+                  {PLACEMENT_LABEL[placement]}
+                  {placement === 'federated' && searchVersion(search.text, catalog) &&
+                    ` · ${searchVersion(search.text, catalog)}`}
+                </span>
               </div>
+              {/* Which dataset this search tests, grouped by where it lives. Only
+                  shown once the catalog is in: without it there is nothing to
+                  group, and the plain label below says what the search reads. */}
+              {datasetGroups.length > 0 ? (
+                <div className={s.datasetPick}>
+                  <label htmlFor={`dataset-${search.id}`}>Dataset</label>
+                  <select
+                    id={`dataset-${search.id}`}
+                    value={offered ? current : ''}
+                    disabled={running}
+                    onChange={(event) => void retarget(search, event.target.value)}
+                  >
+                    {!offered && (
+                      <option value="">
+                        {otherKind
+                          ? `${current} (${otherKind}) — choose a ${federatedMode ? 'federated' : 'Lakehouse'} dataset`
+                          : current
+                            ? `${current} (not a single catalog dataset — edit in Manage searches)`
+                            : 'Choose a dataset…'}
+                      </option>
+                    )}
+                    {datasetGroups.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.ids.map((id) => (
+                          <option key={id} value={id}>
+                            {datasetOptionLabel(catalog, id)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <span className={s.muted}>{current || 'no dataset term'}</span>
+              )}
+              {placement === 'unknown' && (
+                <span className={s.muted}>
+                  Can&rsquo;t tell from the catalog where this runs, so it runs, and each run is filed
+                  by where the server says it executed.
+                </span>
+              )}
+              {/* Half a pair measured is half a comparison: say so before the run,
+                  not after it, when the missing column is already a re-run away. */}
+              {library && search.counterpartId && !chosen.some((entry) => entry.id === search.counterpartId) && (
+                <span className={s.muted}>
+                  Paired with “{library.searches.find((entry) => entry.id === search.counterpartId)?.name}”,
+                  which is not selected. Select it too to measure both copies of the data in this
+                  session.
+                </span>
+              )}
               <pre className={s.searchText}>{search.text}</pre>
             </div>
-          ))}
+            );
+          })}
+
+          {/* Said, so selected searches never seem to vanish when switching type. */}
+          {hiddenCount > 0 && (
+            <p className={s.muted}>
+              {hiddenCount} selected {otherKindLabel} {hiddenCount === 1 ? 'search is' : 'searches are'}{' '}
+              hidden — {hiddenCount === 1 ? 'it runs' : 'they run'} in a {otherKindLabel} test.
+            </p>
+          )}
 
           <div className={s.boundsNote}>
             <b>{selectedDef.id}</b> bounds if started now: <span className={s.mono}>{previewBounds}</span>
@@ -992,6 +1382,70 @@ export default function App() {
 
         </section>
 
+        {federatedMode ? (
+          <section className={`${s.card} ${s.federatedCard}`}>
+            <div className={s.cardHeader}>
+              <div>
+                <h2>Federated search test</h2>
+                <span className={s.muted}>
+                  Times the selected searches on Cribl Search&rsquo;s federated executors, against data
+                  that stays where it is. No Lakehouse engine is used or resized, and engine size has
+                  no effect on these figures.
+                </span>
+              </div>
+              <span className={`${s.tag} ${completedFor(FEDERATED) >= target ? s.tagGood : ''}`}>
+                {completedFor(FEDERATED)} timed so far
+              </span>
+            </div>
+
+            {/* The one line that says what pressing run does. Never "0 searches"
+                without saying why and what to change. */}
+            <p className={s.planLine}>
+              {runnable.length ? (
+                <>
+                  <b>Next run:</b> Federated search · {runnable.length}{' '}
+                  {runnable.length === 1 ? 'search' : 'searches'} × {selectedDef.id} ({selectedDef.label}) ·{' '}
+                  {plannedRuns} runs ({repetitionsFor(config, selectedDef.id)} timed + 1 warm-up each) · est.{' '}
+                  {formatDuration(
+                    estimateSweepSeconds({ plan: planFor([selectedDef]), medianRunMs, resizeSettleSec: 0 }),
+                  )}
+                  {medianRunMs === null && ' (no timing history yet)'}
+                </>
+              ) : (
+                <>
+                  <b>Nothing to run yet.</b> No federated search is selected — choose one under{' '}
+                  <b>Searches being timed</b>.
+                </>
+              )}
+            </p>
+
+            <dl className={s.factList}>
+              <div>
+                <dt>Each run records</dt>
+                <dd>
+                  Total time (queue + execution), <b>billable CPU-seconds</b> — what the search costs —
+                  how many executors it fanned out to, and how long it waited for compute nodes to
+                  start.
+                </dd>
+              </div>
+              <div>
+                <dt>Start-up time</dt>
+                <dd>
+                  Executors that have been idle take time to start. The warm-up run absorbs most of
+                  it; a timed run that still waited is marked, and Analysis can exclude or isolate
+                  those runs.
+                </dd>
+              </div>
+              <div>
+                <dt>Against Lakehouse</dt>
+                <dd>
+                  Pair this search with its Lakehouse copy (Manage searches → Counterpart), run one
+                  session in each test type, then compare them in Analysis.
+                </dd>
+              </div>
+            </dl>
+          </section>
+        ) : (
         <section className={s.card}>
           <div className={s.cardHeader}>
             <div>
@@ -1102,16 +1556,25 @@ export default function App() {
 
           {/* What pressing run will actually do, in one line, before it is pressed. */}
           <p className={s.planLine}>
-            <b>Next run:</b> {describeSweep(planFor([selectedDef]))}
-            {' · est. '}
-            {formatDuration(
-              estimateSweepSeconds({
-                plan: planFor([selectedDef]),
-                medianRunMs,
-                resizeSettleSec: RESIZE_SETTLE_SEC,
-              }),
+            {runnable.length ? (
+              <>
+                <b>Next run:</b> {describeSweep(planFor([selectedDef]))}
+                {' · est. '}
+                {formatDuration(
+                  estimateSweepSeconds({
+                    plan: planFor([selectedDef]),
+                    medianRunMs,
+                    resizeSettleSec: RESIZE_SETTLE_SEC,
+                  }),
+                )}
+                {medianRunMs === null && ' (no timing history yet)'}
+              </>
+            ) : (
+              <>
+                <b>Nothing to run yet.</b> No Lakehouse search is selected — choose one under{' '}
+                <b>Searches being timed</b>.
+              </>
             )}
-            {medianRunMs === null && ' (no timing history yet)'}
           </p>
 
           <p className={s.callout}>
@@ -1123,15 +1586,18 @@ export default function App() {
             inferred from the docs — a rejected resize is reported rather than hidden.
           </p>
         </section>
+        )}
       </div>
 
       <section className={s.card}>
         <div className={s.cardHeader}>
           <div>
-            <h2>How long each search took — {labelTier(activeTier)}</h2>
+            <h2>How long each search took — {labelTier(shownTarget)}</h2>
             <span className={s.muted}>
               Server-measured, start to finish. <b>Typical</b> is the middle run: half were faster,
               half slower.
+              {showingFederated &&
+                ' Federated searches are billed per CPU-second, so the cost columns matter as much as the time.'}
             </span>
           </div>
           <div className={s.headerActions}>
@@ -1151,7 +1617,25 @@ export default function App() {
               <th>Fastest</th>
               <th>Slowest</th>
               <th title="Part of the total spent waiting before the engine started">Of which queue</th>
-              <th title="Part of the total spent executing on the engine">Of which engine</th>
+              <th title={showingFederated ? 'Part of the total spent executing on the federated executors' : 'Part of the total spent executing on the engine'}>
+                {showingFederated ? 'Of which execution' : 'Of which engine'}
+              </th>
+              {showingFederated && (
+                <>
+                  <th title="Median billable CPU-seconds per run — what a federated search costs">
+                    Billable CPU
+                  </th>
+                  <th title="Median executors the search fanned out to, coordinator excluded">
+                    Executors
+                  </th>
+                  <th title="Timed runs that spent time waiting for compute nodes, out of those whose job reported it (compute v1 does not). The main source of federated variance; Analysis can split them out.">
+                    Waited for compute
+                  </th>
+                  <th title="Federated search engine version the server ran these on, as each run's job record reports it">
+                    Version
+                  </th>
+                </>
+              )}
               <th>Events</th>
               {advanced && (
                 <>
@@ -1180,6 +1664,14 @@ export default function App() {
                 <td>{formatSec(row.total.max)}</td>
                 <td className={s.muted}>{formatSec(row.queueMedian)}</td>
                 <td>{formatSec(row.engineMedian)}</td>
+                {showingFederated && (
+                  <>
+                    <td>{formatSec(row.cpuMedian)}</td>
+                    <td>{row.executorsMedian === null ? '—' : Math.round(row.executorsMedian)}</td>
+                    <td>{row.coldKnown ? `${row.coldRuns}/${row.coldKnown}` : '—'}</td>
+                    <td>{row.version || '—'}</td>
+                  </>
+                )}
                 <td>{row.eventCount === null ? '—' : row.eventCount.toLocaleString()}</td>
                 {advanced && (
                   <>
@@ -1305,9 +1797,12 @@ export default function App() {
               <th>Total s</th>
               <th>Queue s</th>
               <th>Engine s</th>
+              <th title="Provider · federated compute version · cold/warm executors · cache">Compute</th>
+              <th title="Billable CPU-seconds">CPU s</th>
               <th>Events</th>
               <th>Status</th>
               <th>Notes</th>
+              <th title="What the search returned, fetched from the server on demand">Results</th>
             </tr>
           </thead>
           <tbody>
@@ -1326,6 +1821,8 @@ export default function App() {
                 </td>
                 <td className={s.muted}>{formatSec(run.queueMs)}</td>
                 <td>{formatSec(run.engineMs)}</td>
+                <td className={s.muted}>{describeCompute(run) || '—'}</td>
+                <td>{formatSec(run.billableCpuMs ?? null)}</td>
                 <td>{run.totalEventCount === null ? '—' : run.totalEventCount.toLocaleString()}</td>
                 <td>
                   <span className={run.status === 'Success' ? s.success : s.failure}>
@@ -1333,6 +1830,16 @@ export default function App() {
                   </span>
                 </td>
                 <td>{run.notes || (run.measured ? 'Timed' : 'Warm-up')}</td>
+                <td>
+                  <button
+                    className={s.linkish}
+                    disabled={!run.jobId}
+                    onClick={() => void openResults(run)}
+                    title={run.jobId ? 'Show the rows this run returned' : 'No job id was recorded for this run'}
+                  >
+                    View
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1427,14 +1934,19 @@ export default function App() {
               {pendingSweep.plan.steps.map((step) => (
                 <li key={step.tier}>
                   <b>{labelTier(step.tier)}</b>
-                  {step.needsResize ? ' — resize first' : ' — already the current size'}
+                  {isFederated(step.tier)
+                    ? ' — federated executors, no resize'
+                    : step.needsResize
+                      ? ' — resize first'
+                      : ' — already the current size'}
+                  {` · ${step.searches} ${step.searches === 1 ? 'search' : 'searches'}`}
                 </li>
               ))}
             </ol>
             <p>
               <b>{pendingSweep.plan.resizes}</b>{' '}
               {pendingSweep.plan.resizes === 1 ? 'resize' : 'resizes'} of live Lakehouse capacity for{' '}
-              <b>{engine?.id}</b>, <b>{pendingSweep.plan.totalRuns}</b> searches in total, roughly{' '}
+              <b>{engine?.id}</b>, <b>{pendingSweep.plan.totalRuns}</b> runs in total, roughly{' '}
               <b>
                 {formatDuration(
                   estimateSweepSeconds({
@@ -1483,7 +1995,78 @@ export default function App() {
                   void runSession(defs, plan);
                 }}
               >
-                Start ({pendingSweep.plan.totalRuns} searches)
+                Start ({pendingSweep.plan.totalRuns} runs)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resultsView && (
+        <div className={s.modalScrim} role="presentation" onClick={() => setResultsView(null)}>
+          <div
+            className={`${s.modal} ${s.resultsModal}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="results-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="results-title">
+              Results — {resultsView.run.searchName || 'search'} · {resultsView.run.window} · {labelTier(resultsView.run.engine)}
+            </h2>
+            <p className={s.muted}>
+              Run at {resultsView.run.at.replace('T', ' ').slice(0, 19)}Z · job{' '}
+              <span className={s.mono}>{resultsView.run.jobId}</span>
+              {resultsView.total !== null &&
+                ` · ${resultsView.total.toLocaleString()} ${resultsView.total === 1 ? 'row' : 'rows'} in total${
+                  resultsView.total > resultsView.rows.length ? `, first ${resultsView.rows.length} shown` : ''
+                }`}
+            </p>
+            {resultsView.loading && <p>Loading results…</p>}
+            {resultsView.error && <div className={s.error}>{resultsView.error}</div>}
+            {!resultsView.loading && !resultsView.error && !resultsView.rows.length && (
+              <p>The search returned no rows.</p>
+            )}
+            {resultsView.rows.length > 0 && (
+              <div className={s.resultsScroll}>
+                <table>
+                  <thead>
+                    <tr>
+                      {resultColumns.map((key) => (
+                        <th key={key}>{key}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resultsView.rows.map((row, index) => (
+                      <tr key={index}>
+                        {resultColumns.map((key) => (
+                          <td key={key} className={s.mono}>
+                            {resultCell(row[key])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className={s.modalActions}>
+              {resultsView.rows.length > 0 && (
+                <button
+                  onClick={async () => {
+                    const ok = await copyToClipboard(
+                      toCsv([resultColumns, ...resultsView.rows.map((row) => resultColumns.map((key) => resultCell(row[key])))]),
+                    );
+                    setMessage(ok ? `Copied ${resultsView.rows.length} result rows as CSV.` : '');
+                    if (!ok) setError('The clipboard is unavailable here.');
+                  }}
+                >
+                  Copy rows (CSV)
+                </button>
+              )}
+              <button className={s.primary} onClick={() => setResultsView(null)}>
+                Close
               </button>
             </div>
           </div>

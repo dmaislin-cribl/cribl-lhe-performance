@@ -1,14 +1,16 @@
 {
   "name": "cribl-lhe-performance",
-  "version": "0.7.0",
+  "version": "0.8.7",
   "type": "module",
-  "displayName": "Cribl LHE Performance Lab",
-  "description": "Run, compare, and review repeatable Lakehouse Engine time-window performance tests.",
+  "displayName": "Cribl Performance Testing",
+  "description": "Run, compare, and review repeatable Cribl Search performance tests, on Lakehouse engine sizes and on federated search over remote data.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build && apps build",
     "package": "apps package",
-    "deploy": "cribl-app-deploy",
+    "deploy": "npm run verify && npm version patch --no-git-tag-version >/dev/null && apps package --version \"$(node -p \"require('./package.json').version\")\" && cribl-app-deploy --artifact \"build/$npm_package_name-$(node -p \"require('./package.json').version\").tgz\"",
+    "deploy:artifact": "cribl-app-deploy",
+    "deploy:version": "npm pkg set version=\"$VERSION\" && npm run verify && apps package --version \"$VERSION\" && cribl-app-deploy --artifact \"build/$npm_package_name-$VERSION.tgz\"",
     "inspect:pack": "cribl-app-inspect",
     "release:evidence": "cribl-app-release-evidence",
     "security:static": "cribl-app-security",
@@ -28,7 +30,7 @@
   },
   "devDependencies": {
     "@cribl/apps": "1.1.0",
-    "@criblio/app-tooling": "^0.2.0",
+    "@criblio/app-tooling": "^0.2.4",
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.45.0",
     "@types/node": "^24.13.3",
@@ -47,6 +49,7 @@
   },
   "cribl": {
     "type": "app",
-    "createAppScriptVersion": "1.1.0"
+    "createAppScriptVersion": "1.1.0",
+    "appAuthMode": "legacy"
   }
 }

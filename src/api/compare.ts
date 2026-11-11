@@ -18,6 +18,7 @@
  */
 
 import type { RunRecord } from './appSettings';
+import { pairCountMismatch, type PairOverlap } from './pairs';
 import { countsAgree, summarizeSamples, type SampleSummary } from './stats';
 import type { WindowDef } from './windows';
 
@@ -137,7 +138,7 @@ export function searchesInLog(runs: RunRecord[]): { id: string; name: string; ru
  * clean its numbers look.
  */
 export interface ComparabilityWarning {
-  kind: 'query' | 'dataset' | 'counts' | 'partial';
+  kind: 'query' | 'dataset' | 'counts' | 'partial' | 'pair' | 'pairCounts' | 'pairOverlap';
   detail: string;
 }
 
@@ -151,12 +152,43 @@ export function checkComparability(
    * value would flag every deliberately-shortened window as a thin sample.
    */
   expectedFor: (windowId: string) => number,
+  /**
+   * Set when `runs` is a paired case (see pairs.ts). Two queries over two
+   * datasets is then the design, not a mistake, so those two warnings give way
+   * to the check that actually matters for a pair: did both copies of the data
+   * match the same events?
+   */
+  pair?: { names: [string, string]; overlaps: PairOverlap[] },
 ): ComparabilityWarning[] {
   const warnings: ComparabilityWarning[] = [];
   const measured = runs.filter((run) => run.measured && run.status === 'Success');
 
+  if (pair) {
+    warnings.push({
+      kind: 'pair',
+      detail: `“${pair.names[0]}” and “${pair.names[1]}” are read as one case: each target's column comes from whichever of the two ran there, never both.`,
+    });
+    const mismatched = rows
+      .map((row) => ({ id: row.window.id, counts: pairCountMismatch(runs, row.window.id) }))
+      .filter((entry) => entry.counts);
+    if (mismatched.length) {
+      warnings.push({
+        kind: 'pairCounts',
+        detail: `The two searches matched different numbers of events in ${mismatched
+          .map((entry) => entry.id)
+          .join(', ')} — the two copies of the data are not the same there, so those rows are not a like-for-like timing comparison.`,
+      });
+    }
+    for (const overlap of pair.overlaps) {
+      warnings.push({
+        kind: 'pairOverlap',
+        detail: `Both searches have runs on ${overlap.target}; only “${overlap.keptSearchName}” is used there, and ${overlap.droppedRuns} timed runs of “${overlap.droppedSearchName}” are set aside rather than pooled.`,
+      });
+    }
+  }
+
   const queries = new Set(measured.map((run) => run.queryHash));
-  if (queries.size > 1) {
+  if (!pair && queries.size > 1) {
     warnings.push({
       kind: 'query',
       detail: `${queries.size} different search definitions appear in this run log. Timings from different queries are not comparable.`,
@@ -164,7 +196,7 @@ export function checkComparability(
   }
 
   const datasets = new Set(measured.map((run) => run.dataset));
-  if (datasets.size > 1) {
+  if (!pair && datasets.size > 1) {
     warnings.push({
       kind: 'dataset',
       detail: `Runs span ${datasets.size} datasets (${[...datasets].join(', ')}).`,

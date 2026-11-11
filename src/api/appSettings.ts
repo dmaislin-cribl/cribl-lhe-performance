@@ -13,7 +13,7 @@
 import { kvGet, kvPut } from './kv';
 import type { BudgetStatistic } from './perfStats';
 import { normalizeSessions, settleStale, type SessionRecord } from './sessions';
-import { canonicalTier } from './tiers';
+import { canonicalTier, isFederated } from './tiers';
 import { DEFAULT_WINDOWS, normalizeWindows, type WindowDef } from './windows';
 
 const CONFIG_KEY = 'settings';
@@ -59,6 +59,16 @@ export interface LabConfig {
    */
   sweepTiers: string[];
   /**
+   * What the workbench is testing. Two separate jobs, not one with an extra
+   * checkbox: a Lakehouse test measures engine sizes and may resize; a
+   * federated test measures searches over remote data, on executors no engine
+   * size affects, and never touches an engine. Mixing them in one plan made the
+   * plan line read "Federated · 0 resizes · 0 searches" when the selected
+   * searches were Lakehouse ones — technically right, practically opaque.
+   * A head-to-head is one session of each; Analysis reads them together.
+   */
+  testMode: TestMode;
+  /**
    * Resize the engine back to the size it started at once a sweep finishes.
    * Default on: a sweep that ends on the largest size leaves live Lakehouse
    * capacity — and its bill — parked at the top until somebody notices.
@@ -72,6 +82,8 @@ export interface LabConfig {
   /** Which percentile the budget is applied to. Tails are what budgets are for. */
   budgetStatistic: BudgetStatistic;
 }
+
+export type TestMode = 'lakehouse' | 'federated';
 
 export interface RunRecord {
   id: string;
@@ -123,6 +135,36 @@ export interface RunRecord {
    */
   sessionId: string;
   sessionName: string;
+  /**
+   * How the job ran, from the server's job record — see federated.ts. Optional
+   * because runs recorded before federated support have none of it, and absent
+   * must read as "not reported", never as zero.
+   *
+   * `path` is where the server says the job executed. `engine` above is filed
+   * from it, so a federated run is never counted as a measurement of an engine
+   * size even when a size sweep launched it.
+   */
+  path?: 'lakehouse' | 'federated' | 'mixed' | '';
+  /** Billable CPU, ms. Federated searches are billed on this; Lakehouse reports 0. */
+  billableCpuMs?: number | null;
+  /** Total CPU across coordinator and executors, ms. */
+  totalCpuMs?: number | null;
+  /** Executors the job fanned out to, coordinator excluded. */
+  executors?: number | null;
+  /**
+   * Most cold / warm compute nodes the job was waiting for at once, and how long
+   * it waited, ms — sampled while it ran, since the server's field is live and
+   * reads 0/0 at completion. Null where the job never reported node statuses
+   * (Lakehouse, compute v1).
+   */
+  computeCold?: number | null;
+  computeWarm?: number | null;
+  computeWaitMs?: number | null;
+  /** Provider types touched (`s3`, `azure_blob`, `cribl_search` …). */
+  providerTypes?: string[];
+  /** Compute types (`local`, `v1`, `v2`). */
+  computeTypes?: string[];
+  cache?: 'hit' | 'miss' | 'mixed' | '';
 }
 
 export interface RunLog {
@@ -152,6 +194,7 @@ export const DEFAULT_CONFIG: LabConfig = {
    * came here to measure. Ticking any box pins the selection instead.
    */
   sweepTiers: [],
+  testMode: 'lakehouse',
   restoreTierAfterSweep: true,
   budgetMs: null,
   budgetStatistic: 'p95',
@@ -214,15 +257,29 @@ export function normalizeConfig(stored: Partial<LabConfig> | null): LabConfig {
     searchGroup: asString(stored?.searchGroup, DEFAULT_CONFIG.searchGroup),
     // Canonicalised and deduplicated on the way in, so a stored alias cannot
     // make one size appear as two in the sweep plan.
+    // Engine sizes only. Federated used to be a tickable entry here; it is a
+    // test mode now, so a stored `federated` is lifted out (into `testMode`
+    // below) rather than left to masquerade as a size.
     sweepTiers: Array.isArray(stored?.sweepTiers)
       ? [
           ...new Set(
             stored.sweepTiers
               .filter((tier): tier is string => typeof tier === 'string' && tier.trim().length > 0)
-              .map(canonicalTier),
+              .map(canonicalTier)
+              .filter((tier) => !isFederated(tier)),
           ),
         ]
       : [...DEFAULT_CONFIG.sweepTiers],
+    testMode:
+      stored?.testMode === 'federated' || stored?.testMode === 'lakehouse'
+        ? stored.testMode
+        : // A build that stored Federated as the only ticked target meant a
+          // federated test; anything else was a size sweep.
+          Array.isArray(stored?.sweepTiers) &&
+            stored.sweepTiers.length > 0 &&
+            stored.sweepTiers.every((tier) => typeof tier === 'string' && isFederated(tier))
+          ? 'federated'
+          : DEFAULT_CONFIG.testMode,
     restoreTierAfterSweep:
       typeof stored?.restoreTierAfterSweep === 'boolean'
         ? stored.restoreTierAfterSweep

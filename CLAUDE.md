@@ -1,4 +1,9 @@
-# cribl-lhe-performance
+# Cribl Performance Testing
+
+App id `cribl-lhe-performance` — kept on purpose; see "App id and
+version" in `AGENTS.md` before renaming it. Measures Cribl Search
+performance two ways: Lakehouse searches across engine sizes, and
+federated searches over remote data (S3, Azure Blob, GCS, Cribl Lake …).
 
 A Cribl Search App (Vite + React + TypeScript) that runs inside
 Cribl Search as a sandboxed iframe. Ship target: Cribl Cloud.
@@ -55,10 +60,41 @@ tool runs it automatically after install — same code path as
 `npm run provision` standalone.
 
 ```bash
-npm run deploy           # full pipeline
+npm run deploy           # full pipeline (bumps the patch version)
+VERSION=0.9.0 npm run deploy:version   # deploy as an exact version
+npm run deploy:artifact -- --artifact build/<file>.tgz   # deploy a pack as-is (CI uses this)
 npm run provision        # reconcile scheduled searches only
 npm run provision -- --dry  # show plan without applying
 ```
+
+**Why `deploy` is not plain `cribl-app-deploy`:** that tool reads the
+version from `package.json`, *then* runs `npm run package` — and `apps
+package` bumps the patch version on every run. It then inspects the
+tarball for the version it read first, which no longer matches, and the
+deploy always fails with `pack identity … does not match package.json`.
+The scripts package first and pass the exact artifact with `--artifact`,
+which also skips the tool's own `verify`, so the scripts run `verify`
+themselves.
+
+They also **set the version before packaging**. `apps package` builds
+first and bumps afterwards, so a plain `apps package` bakes the
+*previous* version into the bundle — the header and every clipboard
+export then show one version behind the installed pack. The scripts
+write the target version to `package.json` first and pass the same
+value to `apps package --version`, so it does not bump again. The deploy target comes from `CRIBL_BASE_URL` in `.env` or
+the environment.
+
+**Strict mode is deliberately off.** `package.json` ships
+`"cribl": { "appAuthMode": "legacy" }` — the *Open* setting of the
+**Strict mode** toggle on the app's Permissions tab, where the app
+inherits each user's own permissions plus `policies.yml`.
+(`policiesOnly` is Strict: only `policies.yml`, admins included.) It is
+shipped rather than left to the toggle because an upgrade applies the
+package's value and only falls back to the previously stored mode when
+the package has none — so without it, one flip of the toggle would stick
+across every later deploy. Keep `policies.yml` complete anyway: it is
+what a non-admin user shared the app is granted, and it is all the app
+gets if the mode is ever switched to Strict.
 
 The provisioner prints each action:
 
@@ -88,9 +124,14 @@ tag, in a clean working tree:
 ```bash
 npm run lint          # must pass — what the workflow gates on
 npm test              # unit tests
-npx tsc --noEmit      # type-check
-npm run package       # full build + tgz produced
+npx tsc -b            # type-check (not --noEmit: the root tsconfig only references sub-projects, so that checks nothing)
+npm pkg set version=X.Y.Z && npm run package -- --version X.Y.Z
 ```
+
+Plain `npm run package` bumps the patch version, so after it
+`package.json` no longer matches the tag you meant to push — and it
+builds before bumping, so the bundle would show the old version. Set the
+version first, then package at that same version.
 
 If any step fails, do not tag. Fix on `master` first.
 

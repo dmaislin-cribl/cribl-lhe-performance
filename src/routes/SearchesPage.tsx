@@ -11,7 +11,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { loadRunLog, type RunRecord } from '../api/appSettings';
+import { DEFAULT_CONFIG, loadConfig, loadRunLog, type RunRecord } from '../api/appSettings';
+import {
+  PLACEMENT_HINT,
+  PLACEMENT_LABEL,
+  classifyDataset,
+  classifySearch,
+  datasetOptionLabel,
+  datasetVersion,
+  groupDatasets,
+  searchVersion,
+  type SearchPlacement,
+} from '../api/federated';
+import { useDatasetCatalog } from '../api/useDatasetCatalog';
 import {
   MAX_SEARCHES,
   MAX_SELECTED,
@@ -27,10 +39,12 @@ import {
   saveLibrary,
   searchWarnings,
   selectOnly,
+  setCounterpart,
   toggleSelected,
   uniqueName,
   upsertSearch,
   validateSearch,
+  withDataset,
   type SavedSearch,
   type SearchLibrary,
 } from '../api/searches';
@@ -42,6 +56,19 @@ type Draft = Pick<SavedSearch, 'id' | 'name' | 'text' | 'notes'>;
 function toDraft(search: SavedSearch): Draft {
   const { id, name, text, notes } = search;
   return { id, name, text, notes };
+}
+
+/** List filter: every search, or only one kind. */
+type KindFilter = 'all' | 'lakehouse' | 'federated';
+
+/**
+ * Whether a search belongs under a kind filter. Mixed searches read both kinds,
+ * so they show under both; unclassified ones (drafts, wildcards, unknown
+ * datasets) only under All, since neither filter can vouch for them.
+ */
+function matchesKind(placement: SearchPlacement, filter: KindFilter): boolean {
+  if (filter === 'all') return true;
+  return placement === filter || placement === 'mixed';
 }
 
 function countRuns(runs: RunRecord[], id: string): number {
@@ -56,6 +83,79 @@ export default function SearchesPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [pendingDelete, setPendingDelete] = useState<SavedSearch | null>(null);
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all');
+  /** Under Federated only: narrow to the v1 or v2 federated search engine. */
+  const [versionFilter, setVersionFilter] = useState<'any' | 'v1' | 'v2'>('any');
+  const [searchGroup, setSearchGroup] = useState(DEFAULT_CONFIG.searchGroup);
+  const catalog = useDatasetCatalog(searchGroup);
+
+  useEffect(() => {
+    void loadConfig().then((config) => setSearchGroup(config.searchGroup));
+  }, []);
+
+  /** Where each saved search runs, from the dataset its text names. */
+  const placements = useMemo(() => {
+    const map = new Map<string, SearchPlacement>();
+    for (const entry of library?.searches ?? []) map.set(entry.id, classifySearch(entry.text, catalog));
+    return map;
+  }, [library, catalog]);
+
+  /** Federated engine version per search; mixed counts under both. */
+  const versions = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof searchVersion>>();
+    for (const entry of library?.searches ?? []) map.set(entry.id, searchVersion(entry.text, catalog));
+    return map;
+  }, [library, catalog]);
+
+  /** The list filter: kind first, then — under Federated — engine version. */
+  const listed = useCallback(
+    (entry: SavedSearch) => {
+      if (!matchesKind(placements.get(entry.id) ?? 'unknown', kindFilter)) return false;
+      if (kindFilter !== 'federated' || versionFilter === 'any') return true;
+      const version = versions.get(entry.id);
+      return version === versionFilter || version === 'mixed';
+    },
+    [placements, versions, kindFilter, versionFilter],
+  );
+
+  /**
+   * The open search stays listed whatever the filter — but only while it has no
+   * dataset to classify by. That is the case it exists for: a draft just added
+   * under a filter must not vanish before it names a dataset. A search that does
+   * name one follows the filter like any other.
+   */
+  const keptOpen = useCallback(
+    (entry: SavedSearch) => entry.id === editingId && (placements.get(entry.id) ?? 'unknown') === 'unknown',
+    [editingId, placements],
+  );
+
+  const versionCounts = useMemo(() => {
+    const federated = (library?.searches ?? []).filter((entry) =>
+      matchesKind(placements.get(entry.id) ?? 'unknown', 'federated'),
+    );
+    const count = (v: 'v1' | 'v2') =>
+      federated.filter((entry) => versions.get(entry.id) === v || versions.get(entry.id) === 'mixed').length;
+    return { any: federated.length, v1: count('v1'), v2: count('v2') };
+  }, [library, placements, versions]);
+
+  const kindCounts = useMemo(() => {
+    const all = library?.searches ?? [];
+    const count = (filter: KindFilter) =>
+      all.filter((entry) => matchesKind(placements.get(entry.id) ?? 'unknown', filter)).length;
+    return { all: all.length, lakehouse: count('lakehouse'), federated: count('federated') };
+  }, [library, placements]);
+
+  /**
+   * The picker follows the filter: filtering to Federated is the moment someone
+   * is writing a federated search, so only federated datasets are offered.
+   */
+  const datasetGroups = useMemo(() => {
+    const groups = groupDatasets(catalog, kindFilter === 'all' ? undefined : kindFilter);
+    if (kindFilter !== 'federated' || versionFilter === 'any') return groups;
+    return groups
+      .map((group) => ({ ...group, ids: group.ids.filter((id) => datasetVersion(catalog, id) === versionFilter) }))
+      .filter((group) => group.ids.length > 0);
+  }, [catalog, kindFilter, versionFilter]);
 
   useEffect(() => {
     void loadLibrary().then((loaded) => {
@@ -225,9 +325,73 @@ export default function SearchesPage() {
             </p>
           )}
 
-          {library.searches.map((entry) => {
+          {/* Kind filter. The open search always stays listed, so a draft just
+              added under a filter does not vanish before it names a dataset. */}
+          {library.searches.length > 0 && (
+            <div className={s.kindFilter} role="radiogroup" aria-label="Show searches">
+              {(
+                [
+                  ['all', 'All'],
+                  ['lakehouse', 'Lakehouse'],
+                  ['federated', 'Federated'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  role="radio"
+                  aria-checked={kindFilter === value}
+                  className={kindFilter === value ? s.kindActive : ''}
+                  onClick={() => setKindFilter(value)}
+                >
+                  {label} <span className={s.kindCount}>{kindCounts[value]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Federated runs on two search engines; v2 is the newer one. Narrows the
+              list and the Dataset picker together. */}
+          {kindFilter === 'federated' && (
+            <div className={`${s.kindFilter} ${s.versionFilter}`} role="radiogroup" aria-label="Federated engine version">
+              {(
+                [
+                  ['any', 'Any version'],
+                  ['v1', 'v1'],
+                  ['v2', 'v2'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  role="radio"
+                  aria-checked={versionFilter === value}
+                  className={versionFilter === value ? s.kindActive : ''}
+                  onClick={() => setVersionFilter(value)}
+                >
+                  {label} <span className={s.kindCount}>{versionCounts[value]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {library.searches.length > 0 &&
+            kindFilter !== 'all' &&
+            !library.searches.some(
+              (entry) => keptOpen(entry) || listed(entry),
+            ) && (
+              <p className={s.listEmpty}>
+                No {kindFilter === 'lakehouse' ? 'Lakehouse' : versionFilter === 'any' ? 'federated' : `federated ${versionFilter}`} searches yet. <b>+ Add</b> one and
+                pick a dataset for it.
+              </p>
+            )}
+
+          {library.searches
+            .filter(
+              (entry) => keptOpen(entry) || listed(entry),
+            )
+            .map((entry) => {
             const chosen = isSelected(library, entry.id);
             const runnable = isRunnable(entry);
+            const placement = placements.get(entry.id) ?? 'unknown';
             return (
               <div
                 key={entry.id}
@@ -243,11 +407,24 @@ export default function SearchesPage() {
                   />
                 </label>
                 <button className={s.listBody} onClick={() => openForEdit(entry.id)}>
-                  <span className={s.listName}>{entry.name}</span>
+                  <span className={s.listName}>
+                    {entry.name}
+                    {runnable && (
+                      <span
+                        className={`${s.kindTag} ${placement === 'federated' ? s.kindTagFederated : placement === 'lakehouse' ? s.kindTagLakehouse : ''}`}
+                        title={PLACEMENT_HINT[placement]}
+                      >
+                        {PLACEMENT_LABEL[placement]}
+                        {placement === 'federated' && versions.get(entry.id) && ` · ${versions.get(entry.id)}`}
+                      </span>
+                    )}
+                  </span>
                   <span className={s.listMeta}>
                     {runnable
                       ? `${deriveDataset(entry.text) || 'no dataset term'} · ${countRuns(runs, entry.id)} measured runs`
                       : 'empty draft — not runnable'}
+                    {entry.counterpartId &&
+                      ` · paired with ${library.searches.find((other) => other.id === entry.counterpartId)?.name ?? '?'}`}
                   </span>
                 </button>
               </div>
@@ -321,6 +498,46 @@ export default function SearchesPage() {
             The label in the run log, the comparison view and every export, so it has to be distinct.
           </span>
 
+          {/* Pick the dataset instead of typing it. Grouped by where the data
+              lives, and narrowed to one kind when the list is filtered. Edits
+              the draft like typing would — nothing is saved until Save. */}
+          {datasetGroups.length > 0 && (
+            <>
+              <label htmlFor="dataset">Dataset</label>
+              <select
+                id="dataset"
+                className={s.field}
+                value={datasetGroups.some((group) => group.ids.includes(dataset)) ? dataset : ''}
+                onChange={(event) =>
+                  event.target.value &&
+                  setDraft({ ...draft, text: withDataset(draft.text, event.target.value) })
+                }
+              >
+                <option value="">
+                  {!dataset
+                    ? 'Choose a dataset…'
+                    : catalog?.has(dataset)
+                      ? `${dataset} (${classifyDataset(catalog, dataset) === 'lakehouse' ? 'Lakehouse' : 'federated'}) — not in this filter`
+                      : `${dataset} (not a single catalog dataset)`}
+                </option>
+                {datasetGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.ids.map((id) => (
+                      <option key={id} value={id}>
+                        {datasetOptionLabel(catalog, id)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <span className={s.hint}>
+                {kindFilter === 'all'
+                  ? 'Lakehouse datasets are timed on engine sizes; federated datasets on the federated executors, on the v1 or v2 search engine shown beside each. Sets the dataset= term below.'
+                  : `Showing ${kindFilter === 'lakehouse' ? 'Lakehouse' : 'federated'} datasets only, to match the list filter. Sets the dataset= term below.`}
+              </span>
+            </>
+          )}
+
           <label htmlFor="text">Complete search</label>
           <textarea
             id="text"
@@ -359,6 +576,45 @@ export default function SearchesPage() {
           <span className={s.hint}>
             What this case is meant to exercise. Kept with the search, never measured.
           </span>
+
+          {editing && (
+            <>
+              <label htmlFor="counterpart">Counterpart</label>
+              <select
+                id="counterpart"
+                className={s.field}
+                value={editing.counterpartId ?? ''}
+                onChange={(event) => {
+                  const otherId = event.target.value;
+                  const other = library.searches.find((entry) => entry.id === otherId);
+                  void commit(
+                    setCounterpart(library, editing.id, otherId),
+                    other
+                      ? `Paired “${editing.name}” with “${other.name}”.`
+                      : `“${editing.name}” is no longer paired.`,
+                  );
+                }}
+              >
+                <option value="">None</option>
+                {library.searches
+                  .filter((entry) => entry.id !== editing.id)
+                  .map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.name}
+                      {entry.counterpartId && entry.counterpartId !== editing.id
+                        ? ' (re-pairs it)'
+                        : ''}
+                    </option>
+                  ))}
+              </select>
+              <span className={s.hint}>
+                The same question asked of the other copy of the data, for example this Lakehouse
+                search and the federated search over the S3 bucket it was archived from. Analysis and
+                Compare then read the two as one case across engine sizes and Federated. Saved
+                straight away, and applies to runs already recorded.
+              </span>
+            </>
+          )}
 
           {editingRuns > 0 && dirty && (
             <p className={s.note}>

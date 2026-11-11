@@ -167,3 +167,21 @@ describe('pruneRunLog', () => {
     expect(pruneRunLog(log).runs).toHaveLength(MAX_RUNS);
   });
 });
+
+describe('testMode', () => {
+  it('defaults to Lakehouse and keeps Federated out of the size list', async () => {
+    const { normalizeConfig } = await import('./appSettings');
+    expect(normalizeConfig(null).testMode).toBe('lakehouse');
+    const mixed = normalizeConfig({ sweepTiers: ['small', 'federated'] });
+    expect(mixed.sweepTiers).toEqual(['small']);
+    expect(mixed.testMode).toBe('lakehouse');
+  });
+
+  it('reads a stored Federated-only selection as a federated test', async () => {
+    const { normalizeConfig } = await import('./appSettings');
+    const migrated = normalizeConfig({ sweepTiers: ['federated'] });
+    expect(migrated.testMode).toBe('federated');
+    expect(migrated.sweepTiers).toEqual([]);
+    expect(normalizeConfig({ testMode: 'federated', sweepTiers: ['large'] }).sweepTiers).toEqual(['large']);
+  });
+});

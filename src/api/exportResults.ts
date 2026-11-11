@@ -59,7 +59,23 @@ const RUN_HEADER = [
   'search_name',
   'session_name',
   'notes',
+  // Appended, not interleaved, so a sheet built on the earlier column order
+  // still lines up. Blank on runs recorded before federated support.
+  'execution_path',
+  'billable_cpu_sec',
+  'total_cpu_sec',
+  'executors',
+  'peak_pending_cold_nodes',
+  'peak_pending_warm_nodes',
+  'compute_wait_sec',
+  'provider_types',
+  'compute_types',
+  'cache',
 ];
+
+function secOrBlank(ms: number | null | undefined): string {
+  return typeof ms === 'number' ? (ms / 1000).toFixed(3) : '';
+}
 
 function isoAt(epochSec: number): string {
   return new Date(epochSec * 1000).toISOString();
@@ -87,6 +103,16 @@ function runRow(run: RunRecord): unknown[] {
     run.searchName,
     run.sessionName,
     run.notes,
+    run.path ?? '',
+    secOrBlank(run.billableCpuMs),
+    secOrBlank(run.totalCpuMs),
+    run.executors ?? '',
+    run.computeCold ?? '',
+    run.computeWarm ?? '',
+    secOrBlank(run.computeWaitMs),
+    (run.providerTypes ?? []).join('+'),
+    (run.computeTypes ?? []).join('+'),
+    run.cache ?? '',
   ];
 }
 
@@ -248,7 +274,7 @@ export function analysisToCsv(rows: SizeAnalysis[]): string {
  * qualifier, and nothing a reader has to be walked through.
  */
 export function analysisToMarkdown(rows: SizeAnalysis[], baseline: string): string {
-  const header = ['Engine size', 'Runs', 'Median', 'p95', 'Variability', `vs ${labelTier(baseline)}`, 'Significant?'];
+  const header = ['Target', 'Runs', 'Median', 'p95', 'Variability', `vs ${labelTier(baseline)}`, 'Significant?'];
   const body = rows.map((row) => {
     const comparison = row.vsBaseline;
     const change =

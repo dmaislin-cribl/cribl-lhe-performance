@@ -250,3 +250,42 @@ describe('searchWarnings', () => {
     expect(searchWarnings('dataset="d"\n| summarize count()')).toEqual([]);
   });
 });
+
+describe('withDataset / retargetSearch', () => {
+  it('swaps the dataset term in any quoting and leaves the rest alone', async () => {
+    const { withDataset } = await import('./searches');
+    expect(withDataset('dataset="a" | count', 'b')).toBe('dataset="b" | count');
+    expect(withDataset("dataset='a' host=x\n| count", 'b')).toBe('dataset="b" host=x\n| count');
+    expect(withDataset('dataset=a,c | count', 'b')).toBe('dataset="b" | count');
+    expect(withDataset('| summarize c=count()', 'b')).toBe('dataset="b"\n| summarize c=count()');
+    expect(withDataset('host=x | count', 'b')).toBe('dataset="b" host=x | count');
+  });
+
+  it('edits a search with no runs in place', async () => {
+    const { makeSearch, retargetSearch } = await import('./searches');
+    const search = { ...makeSearch({ name: 'POS', text: 'dataset="lh" | count' }), id: 'x' };
+    const result = retargetSearch({ searches: [search], selectedIds: ['x'] }, 'x', 's3', false);
+    expect(result.copied).toBe(false);
+    expect(result.library.searches).toHaveLength(1);
+    expect(result.library.searches[0].text).toBe('dataset="s3" | count');
+  });
+
+  it('copies a search that has runs, so its measurements are never pooled with another dataset', async () => {
+    const { makeSearch, retargetSearch } = await import('./searches');
+    const search = { ...makeSearch({ name: 'POS', text: 'dataset="lh" | count' }), id: 'x' };
+    const result = retargetSearch({ searches: [search], selectedIds: ['x'] }, 'x', 's3', true);
+    expect(result.copied).toBe(true);
+    expect(result.library.searches[0].text).toBe('dataset="lh" | count');
+    const copy = result.library.searches[1];
+    expect(copy.text).toBe('dataset="s3" | count');
+    expect(copy.name).toBe('POS · s3');
+    // The copy takes the original's place in what runs next.
+    expect(result.library.selectedIds).toEqual([copy.id]);
+  });
+
+  it('is a no-op when the dataset is unchanged', async () => {
+    const { makeSearch, retargetSearch } = await import('./searches');
+    const library = { searches: [{ ...makeSearch({ text: 'dataset="lh"' }), id: 'x' }], selectedIds: [] };
+    expect(retargetSearch(library, 'x', 'lh', true).library).toBe(library);
+  });
+});

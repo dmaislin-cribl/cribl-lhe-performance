@@ -32,13 +32,15 @@ import {
 import { P95_MIN_SAMPLES, formatSec } from '../api/stats';
 import {
   BASELINE_TIER,
-  ENGINE_TIERS,
+  MEASURE_TARGETS,
   MAX_CHARTED_TIERS,
   labelTier,
   tierColor,
   tierIndex,
 } from '../api/tiers';
 import { summarizeSessions } from '../api/sessions';
+import { pairRuns } from '../api/pairs';
+import { counterpartOf, loadLibrary, type SearchLibrary } from '../api/searches';
 
 import s from './ComparePage.module.css';
 
@@ -60,6 +62,9 @@ const WARNING_TITLES: Record<string, string> = {
   dataset: 'Mixed datasets:',
   counts: 'Data moved mid-run:',
   partial: 'Incomplete samples:',
+  pair: 'Paired case:',
+  pairCounts: 'Copies disagree:',
+  pairOverlap: 'Overlap set aside:',
 };
 
 const METRIC_LABELS: Record<Metric, string> = {
@@ -99,10 +104,14 @@ export default function ComparePage() {
   const [params] = useSearchParams();
   const [sessionId, setSessionId] = useState(params.get('session') ?? ALL_SESSIONS);
   const [copied, setCopied] = useState('');
+  const [library, setLibrary] = useState<SearchLibrary | null>(null);
+  /** Read a paired search with its counterpart. On by default — it is why pairs exist. */
+  const [includePair, setIncludePair] = useState(true);
 
   useEffect(() => {
     void loadRunLog().then(setLog);
     void loadConfig().then(setConfig);
+    void loadLibrary().then(setLibrary);
   }, []);
 
   /**
@@ -130,19 +139,31 @@ export default function ComparePage() {
    */
   const activeSearchId = searchId ?? searches[0]?.id ?? ALL_SEARCHES;
 
+  const counterpart = useMemo(
+    () =>
+      library && activeSearchId !== ALL_SEARCHES ? counterpartOf(library, activeSearchId) : null,
+    [library, activeSearchId],
+  );
+  const pairActive = includePair && counterpart !== null;
+  const pairing = useMemo(
+    () => pairRuns(inSession, activeSearchId, pairActive ? (counterpart?.id ?? null) : null),
+    [inSession, activeSearchId, pairActive, counterpart],
+  );
+
   const scoped = useMemo(
     () =>
       activeSearchId === ALL_SEARCHES
         ? inSession
-        : inSession.filter((run) => (run.searchId || '(unattributed)') === activeSearchId),
-    [inSession, activeSearchId],
+        : pairing.runs.filter((run) => (run.searchId || '(unattributed)') === activeSearchId),
+    [inSession, pairing, activeSearchId],
   );
+  const activeName = searches.find((entry) => entry.id === activeSearchId)?.name ?? activeSearchId;
 
   /** Engine time and total time are different columns of the same run. */
   const field = metric === 'engine' ? 'engineMs' : 'totalMs';
 
   const tiers = useMemo(() => {
-    const present = tiersWithData(scoped, ENGINE_TIERS, field);
+    const present = tiersWithData(scoped, MEASURE_TARGETS, field);
     // Always show the baseline column, even before it has data, so the reader
     // can see what the comparison is measured against.
     return present.includes(baseline) ? present : [baseline, ...present];
@@ -154,8 +175,17 @@ export default function ComparePage() {
   );
 
   const warnings = useMemo(
-    () => checkComparability(scoped, rows, tiers, (id) => repetitionsFor(config, id)),
-    [scoped, rows, tiers, config],
+    () =>
+      checkComparability(
+        scoped,
+        rows,
+        tiers,
+        (id) => repetitionsFor(config, id),
+        pairActive && counterpart
+          ? { names: [activeName, counterpart.name], overlaps: pairing.overlaps }
+          : undefined,
+      ),
+    [scoped, rows, tiers, config, pairActive, counterpart, activeName, pairing],
   );
 
   /**
@@ -280,6 +310,16 @@ export default function ComparePage() {
             {searches.length > 1 && <option value={ALL_SEARCHES}>All searches together (mixed)</option>}
             {!searches.length && <option value={ALL_SEARCHES}>No runs recorded yet</option>}
           </select>
+          {counterpart && (
+            <label className={s.pairToggle} title="Read this search and its counterpart as one case: each target's column comes from whichever of the two ran there.">
+              <input
+                type="checkbox"
+                checked={includePair}
+                onChange={(event) => setIncludePair(event.target.checked)}
+              />
+              Include counterpart “{counterpart.name}”
+            </label>
+          )}
         </div>
         <div>
           <label htmlFor="metric">Metric</label>
@@ -294,7 +334,7 @@ export default function ComparePage() {
         <div>
           <label htmlFor="baseline">Baseline tier</label>
           <select id="baseline" value={baseline} onChange={(event) => setBaseline(event.target.value)}>
-            {ENGINE_TIERS.map((tier) => (
+            {MEASURE_TARGETS.map((tier) => (
               <option key={tier} value={tier}>
                 {labelTier(tier)}
               </option>

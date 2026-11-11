@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   type AnalysisMetric,
+  type ComputeFilter,
   type AnalysisScope,
   analysisOptions,
   analyzeByTier,
@@ -48,9 +49,11 @@ import {
   type BudgetStatistic,
   quantileMinSamples,
 } from '../api/perfStats';
+import { pairCountMismatch, pairRuns } from '../api/pairs';
+import { counterpartOf, loadLibrary, type SearchLibrary } from '../api/searches';
 import { summarizeSessions } from '../api/sessions';
 import { formatSec } from '../api/stats';
-import { BASELINE_TIER, ENGINE_TIERS, labelTier, tierColor } from '../api/tiers';
+import { BASELINE_TIER, MEASURE_TARGETS, labelTier, tierColor } from '../api/tiers';
 import StatusBanner from '../components/StatusBanner';
 import s from './AnalysisPage.module.css';
 
@@ -59,6 +62,13 @@ const ALL_SESSIONS = '';
 const METRIC_LABELS: Record<AnalysisMetric, string> = {
   total: 'Total time (queue + execution)',
   engine: 'Engine execution only',
+  cpu: 'Billable CPU (federated cost)',
+};
+
+const COMPUTE_LABELS: Record<ComputeFilter, string> = {
+  all: 'All runs',
+  'exclude-wait': 'Exclude compute waits',
+  'wait-only': 'Compute waits only',
 };
 
 const BUDGET_STATISTICS: BudgetStatistic[] = ['p50', 'p90', 'p95', 'p99'];
@@ -99,9 +109,17 @@ export default function AnalysisPage() {
   const [searchId, setSearchId] = useState<string | null>(null);
   const [windowId, setWindowId] = useState<string | null>(null);
   const [metric, setMetric] = useState<AnalysisMetric>('total');
+  const [compute, setCompute] = useState<ComputeFilter>('all');
+  const [library, setLibrary] = useState<SearchLibrary | null>(null);
+  /** Read a paired search together with its counterpart. On by default — it is why pairs exist. */
+  const [includePair, setIncludePair] = useState(true);
   const [baseline, setBaseline] = useState(BASELINE_TIER);
   const [budgetSec, setBudgetSec] = useState('');
   const [copied, setCopied] = useState('');
+
+  useEffect(() => {
+    void loadLibrary().then(setLibrary);
+  }, []);
 
   useEffect(() => {
     void Promise.all([loadRunLog(), loadConfig()]).then(([storedLog, storedConfig]) => {
@@ -153,13 +171,39 @@ export default function AnalysisPage() {
       baseline,
       budgetMs,
       budgetStatistic: config.budgetStatistic,
+      compute,
     }),
-    [activeSearch, activeWindow, metric, baseline, budgetMs, config.budgetStatistic],
+    [activeSearch, activeWindow, metric, baseline, budgetMs, config.budgetStatistic, compute],
+  );
+
+  /**
+   * The selected search's counterpart, by the library's current pairing. A
+   * pairing is a way of reading runs, not a property of them, so re-pairing in
+   * the library re-reads old runs too.
+   */
+  const counterpart = useMemo(
+    () => (library && activeSearch ? counterpartOf(library, activeSearch) : null),
+    [library, activeSearch],
+  );
+  const pairing = useMemo(
+    () => pairRuns(inSession, activeSearch, includePair ? (counterpart?.id ?? null) : null),
+    [inSession, activeSearch, includePair, counterpart],
+  );
+  const pairActive = includePair && counterpart !== null;
+  const countMismatch = useMemo(
+    () =>
+      pairActive
+        ? pairCountMismatch(
+            pairing.runs.filter((run) => (run.searchId || '(unattributed)') === activeSearch),
+            activeWindow,
+          )
+        : null,
+    [pairActive, pairing, activeSearch, activeWindow],
   );
 
   const rows = useMemo(
-    () => (activeSearch && activeWindow ? analyzeByTier(inSession, scope) : []),
-    [inSession, scope, activeSearch, activeWindow],
+    () => (activeSearch && activeWindow ? analyzeByTier(pairing.runs, scope) : []),
+    [pairing, scope, activeSearch, activeWindow],
   );
 
   const withData = rows.filter((row) => row.summary.n > 0);
@@ -193,8 +237,10 @@ export default function AnalysisPage() {
         view: 'performance analysis',
         session: session?.name ?? 'all sessions',
         search: search?.label ?? activeSearch,
+        'paired with': pairActive && counterpart ? counterpart.name : 'none',
         window: activeWindow,
         metric: METRIC_LABELS[metric],
+        'compute wait': COMPUTE_LABELS[compute],
         baseline: labelTier(baseline),
         'acceptance budget': budgetMs === null ? 'none' : `${config.budgetStatistic} <= ${(budgetMs / 1000).toFixed(3)}s`,
         'significance test': `Mann-Whitney U, two-sided, alpha=${ALPHA}`,
@@ -203,6 +249,9 @@ export default function AnalysisPage() {
       },
     );
   }, [
+    compute,
+    counterpart,
+    pairActive,
     log,
     inSession,
     sessionOptions,
@@ -296,6 +345,16 @@ export default function AnalysisPage() {
               </option>
             ))}
           </select>
+          {counterpart && (
+            <label className={s.pairToggle} title="Read this search and its counterpart as one case: each target's figures come from whichever of the two ran there.">
+              <input
+                type="checkbox"
+                checked={includePair}
+                onChange={(event) => setIncludePair(event.target.checked)}
+              />
+              Include counterpart “{counterpart.name}”
+            </label>
+          )}
         </div>
         <div>
           <label htmlFor="window">Time window</label>
@@ -327,9 +386,25 @@ export default function AnalysisPage() {
           </select>
         </div>
         <div>
+          <label htmlFor="compute" title="Federated (compute v2) runs report time spent waiting for compute nodes. Splitting those runs out stops start-up latency widening every interval.">
+            Compute wait
+          </label>
+          <select
+            id="compute"
+            value={compute}
+            onChange={(event) => setCompute(event.target.value as ComputeFilter)}
+          >
+            {Object.entries(COMPUTE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
           <label htmlFor="baseline">Compare against</label>
           <select id="baseline" value={baseline} onChange={(event) => setBaseline(event.target.value)}>
-            {ENGINE_TIERS.map((tier) => (
+            {MEASURE_TARGETS.map((tier) => (
               <option key={tier} value={tier}>
                 {labelTier(tier)}
               </option>
@@ -377,6 +452,29 @@ export default function AnalysisPage() {
         </p>
       </section>
 
+      {pairActive && (pairing.overlaps.length > 0 || countMismatch) && (
+        <ul className={s.pairNotes}>
+          {countMismatch && (
+            <li className={s.warnNote}>
+              <b>Warning:</b> the paired searches matched different numbers of events in{' '}
+              {activeWindow} (
+              {Object.entries(countMismatch)
+                .map(([target, count]) => `${labelTier(target)} ${count.toLocaleString()}`)
+                .join(', ')}
+              ). The two copies of the data are not the same, so this is not a like-for-like timing
+              comparison.
+            </li>
+          )}
+          {pairing.overlaps.map((overlap) => (
+            <li key={overlap.target} className={s.infoNote}>
+              <b>Note:</b> both searches have runs on {labelTier(overlap.target)}. Only “
+              {overlap.keptSearchName}” is used there; {overlap.droppedRuns} timed runs of “
+              {overlap.droppedSearchName}” are set aside rather than pooled.
+            </li>
+          ))}
+        </ul>
+      )}
+
       {!withData.length && (
         <div className={s.empty}>
           <h2>No timed runs in this scope</h2>
@@ -415,7 +513,7 @@ export default function AnalysisPage() {
               <table className={s.table}>
                 <thead>
                   <tr>
-                    <th>Engine size</th>
+                    <th>Target</th>
                     <th title="Timed runs behind this row">Runs</th>
                     <th>Failed</th>
                     <th>Fastest</th>
@@ -498,7 +596,7 @@ export default function AnalysisPage() {
               <table className={s.table}>
                 <thead>
                   <tr>
-                    <th>Engine size</th>
+                    <th>Target</th>
                     <th>Runs</th>
                     <th title="Hodges-Lehmann shift: the median of every pairwise difference. Negative is faster.">
                       Shift vs baseline

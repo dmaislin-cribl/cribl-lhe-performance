@@ -104,6 +104,8 @@
   --chart-7: #18437b;
   --chart-8: #11335f;
   --chart-9: #052445;
+  /* Federated is a different kind of target, not a size: its own hue, never a ramp step. */
+  --chart-federated: #c2560a;
   /* Chart chrome: one step off the surface, recessive. */
   --chart-grid: #e8eaed;
   --chart-crosshair: #b9bcc2;
@@ -155,6 +157,7 @@
     --chart-7: #9cc5f3;
     --chart-8: #bdd8f8;
     --chart-9: #ddebfd;
+    --chart-federated: #f29a4a;
     --chart-grid: #2f2f2d;
     --chart-crosshair: #55554f;
   }

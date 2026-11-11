@@ -113,16 +113,40 @@ export function canonicalTier(value: string): string {
   return BY_ID.get(key)?.id ?? key;
 }
 
+/**
+ * The federated search engine, as a measurement target beside the LHE sizes.
+ *
+ * Not a size, and deliberately not in `TIERS`: nothing resizes it, it has no
+ * daily capacity, and `tierDef` returns null for it so every resize code path
+ * treats it as "not a Lakehouse engine" without a special case. It lives in the
+ * same `RunRecord.engine` field as the sizes so the run log, Compare, Analysis
+ * and Sessions all read it the same way — that is what lets a Lakehouse search
+ * and a federated search over the same data sit in one comparison.
+ *
+ * Federated execution is decided by the datasets a query names, not by any
+ * switch this app sends — see federated.ts for how runs are attributed.
+ */
+export const FEDERATED = 'federated';
+
+export function isFederated(target: string): boolean {
+  return target.trim().toLowerCase() === FEDERATED;
+}
+
+/** Every target a run can be measured on: the LHE sizes, then federated. */
+export const MEASURE_TARGETS: string[] = [...ENGINE_TIERS, FEDERATED];
+
 export function tierDef(tier: string): TierDef | null {
   return BY_ID.get(tier.trim().toLowerCase()) ?? null;
 }
 
 export function labelTier(tier: string): string {
+  if (isFederated(tier)) return 'Federated';
   return tierDef(tier)?.label ?? tier;
 }
 
 /** "XLarge · 4.8 TB/day" for a picker, or just the label when capacity is unknown. */
 export function describeTier(tier: string): string {
+  if (isFederated(tier)) return 'Federated · searches remote data in place';
   const def = tierDef(tier);
   if (!def) return tier;
   // Below a terabyte, say GB. "0.075 TB/day" for Nano is technically right and
@@ -137,10 +161,13 @@ export function describeTier(tier: string): string {
 }
 
 export function tierIndex(tier: string): number {
+  // After every size but ahead of unrecognised ones: it is a known target, just
+  // not a point on the size ramp.
+  if (isFederated(tier)) return ENGINE_TIERS.length;
   const index = ENGINE_TIERS.indexOf(canonicalTier(tier));
   // Unknown sizes sort last rather than first, so a surprise value from the API
   // does not claim to be smaller than Small.
-  return index === -1 ? ENGINE_TIERS.length : index;
+  return index === -1 ? ENGINE_TIERS.length + 1 : index;
 }
 
 /**
@@ -151,7 +178,7 @@ export function mergeDiscoveredTiers(observed: string[]): string[] {
   const extra: string[] = [];
   for (const value of observed) {
     const id = canonicalTier(value);
-    if (!id || BY_ID.has(id) || extra.includes(id)) continue;
+    if (!id || BY_ID.has(id) || isFederated(id) || extra.includes(id)) continue;
     extra.push(id);
   }
   return [...ENGINE_TIERS, ...extra];
@@ -186,6 +213,9 @@ const TIER_COLORS: Record<string, string> = {
 };
 
 export function tierColor(tier: string): string {
+  // A separate hue, not a ramp step: federated is a different kind of target,
+  // not a size bigger or smaller than the others.
+  if (isFederated(tier)) return 'var(--chart-federated)';
   return TIER_COLORS[canonicalTier(tier)] ?? 'var(--cds-color-fg-muted)';
 }
 

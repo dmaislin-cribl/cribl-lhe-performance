@@ -109,7 +109,8 @@ describe('tierIndex', () => {
   });
 
   it('sorts an unknown size last, never below Small', () => {
-    expect(tierIndex('9xlarge')).toBe(ENGINE_TIERS.length);
+    // After Federated too, which takes ENGINE_TIERS.length.
+    expect(tierIndex('9xlarge')).toBe(ENGINE_TIERS.length + 1);
     expect(tierIndex('9xlarge')).toBeGreaterThan(tierIndex('3xlarge'));
   });
 });
@@ -136,5 +137,20 @@ describe('mergeDiscoveredTiers', () => {
 describe('MAX_CHARTED_TIERS', () => {
   it('is below the number of sizes, since plotting all of one hue is unreadable', () => {
     expect(MAX_CHARTED_TIERS).toBeLessThan(ENGINE_TIERS.length);
+  });
+});
+
+describe('federated target', () => {
+  it('labels, orders and colours Federated apart from the sizes', async () => {
+    const { FEDERATED, MEASURE_TARGETS, labelTier, tierIndex, tierColor, tierDef, mergeDiscoveredTiers } =
+      await import('./tiers');
+    expect(labelTier(FEDERATED)).toBe('Federated');
+    expect(MEASURE_TARGETS[MEASURE_TARGETS.length - 1]).toBe(FEDERATED);
+    expect(tierIndex(FEDERATED)).toBeGreaterThan(tierIndex('3xlarge'));
+    expect(tierIndex(FEDERATED)).toBeLessThan(tierIndex('some-unknown-size'));
+    expect(tierColor(FEDERATED)).toBe('var(--chart-federated)');
+    // Not a size: nothing in the resize path may treat it as one.
+    expect(tierDef(FEDERATED)).toBeNull();
+    expect(mergeDiscoveredTiers([FEDERATED])).not.toContain(FEDERATED);
   });
 });
