@@ -150,10 +150,10 @@ export function validateSweep(input: {
   // empty column that reads like a measurement nobody took.
   const empty = (steps ?? []).filter((step) => step.searches === 0);
   if (empty.some((step) => isFederated(step.tier))) {
-    return 'Federated is ticked, but none of the selected searches read a federated dataset (S3, Azure Blob, GCS, Cribl Lake, Edge, API …). Select one, or untick Federated.';
+    return 'None of the selected searches reads a federated dataset, so a federated test has nothing to run. Pick one from a search’s Dataset list, under a “Federated” group.';
   }
   if (empty.length) {
-    return `${empty.map((step) => labelTier(step.tier)).join(', ')} ${empty.length === 1 ? 'is' : 'are'} ticked, but every selected search reads federated data, which no engine size affects. Select a Lakehouse search, or tick only Federated.`;
+    return 'Every selected search reads remote data, which no engine size affects, so a Lakehouse test has nothing to run. Pick a Lakehouse dataset on a search, or switch to Federated search.';
   }
   return null;
 }
@@ -162,7 +162,10 @@ export function validateSweep(input: {
 export function describeSweep(plan: SweepPlan): string {
   if (!plan.steps.length) return 'Nothing selected.';
   const sizes = plan.steps.map((step) => labelTier(step.tier)).join(' → ');
-  return `${sizes} · ${plan.resizes} ${plan.resizes === 1 ? 'resize' : 'resizes'} · ${plan.totalRuns} searches`;
+  // Runs, not "searches": the figure counts every timed run and warm-up, and
+  // calling it searches made "3 searches" read as three different queries.
+  const resizes = plan.resizes === 0 ? 'no resize' : `${plan.resizes} ${plan.resizes === 1 ? 'resize' : 'resizes'}`;
+  return `${sizes} · ${resizes} · ${plan.totalRuns} ${plan.totalRuns === 1 ? 'run' : 'runs'}`;
 }
 
 /**

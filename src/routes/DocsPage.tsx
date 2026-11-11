@@ -63,12 +63,13 @@ export default function DocsPage() {
     <div className={s.page}>
       <div className={s.head}>
         <div>
-          <h1>How this lab works</h1>
+          <h1>How Cribl Performance Testing works</h1>
           <p className={s.intro}>
-            A Lakehouse Engine performance lab: it runs the same saved searches over a fixed set of
-            time windows, repeatedly, on one or more engine sizes, and reports how long each one
-            took — with enough provenance that the numbers survive being pasted into a customer
-            deck. This page is the reasoning behind the readouts. Every threshold quoted below is
+            Cribl Performance Testing runs the same saved searches over a fixed set of time
+            windows, repeatedly, and reports how long each one took. It runs two kinds of test:
+            Lakehouse searches on one or more engine sizes, and federated searches over data that
+            stays in S3, Azure Blob, GCS, Cribl Lake and other remote stores. Every figure carries
+            enough provenance to survive being pasted into a customer deck. This page is the reasoning behind the readouts. Every threshold quoted below is
             read from the code that enforces it, so it cannot drift out of date.
           </p>
         </div>
@@ -286,20 +287,37 @@ export default function DocsPage() {
       <section className={s.block} id="federated">
         <h2>Federated search</h2>
         <p>
-          <b>Federated</b> is a target beside the engine sizes. It measures searches over data
-          that stays where it is (S3, Azure Blob, GCS, Cribl Lake, Edge, API and Log Analytics
-          datasets), run by Cribl Search&rsquo;s federated executors and not by a Lakehouse
-          engine. Tick it in the target list. It runs after the sizes and never resizes anything.
+          The workbench runs one of two tests, chosen at the top: <b>Lakehouse engine sizes</b>{' '}
+          or <b>Federated search</b>. A federated test measures searches over data that stays
+          where it is (S3, Azure Blob, GCS, Cribl Lake, Edge, API and Log Analytics datasets). Those
+          searches run on Cribl Search&rsquo;s federated executors, not on a Lakehouse engine. In
+          this mode the engine controls disappear, nothing is resized, and engine size plays no
+          part in the figures.
+        </p>
+        <ol>
+          <li>Choose <b>Federated search</b> at the top of the workbench.</li>
+          <li>
+            On each search under <b>Searches being timed</b>, pick the <b>Dataset</b> to test. The
+            list groups your workspace&rsquo;s datasets by where they live: Lakehouse, then
+            Federated by storage type (Amazon S3, Azure Blob Storage, Google Cloud Storage, Cribl
+            Lake …).
+          </li>
+          <li>Pick a time window and press <b>Time</b>.</li>
+        </ol>
+        <p>
+          Changing a search&rsquo;s dataset edits the search, unless it already has measured runs.
+          Then a copy named for the new dataset takes its place, and the original keeps its runs.
+          Otherwise Analysis would pool timings from two datasets under one search.
         </p>
         <ul>
           <li>
             <b>The dataset decides where a search runs, not this app.</b> Nothing sent with a
             search says &ldquo;run this federated&rdquo;. So before a run, each selected search is
-            sorted using the dataset catalog. Searches over Lakehouse datasets run on the sizes you
-            ticked, because no federated setting affects them. Searches over remote datasets run on
-            Federated, because no engine size affects them. A search that names both kinds, a
-            wildcard, or nothing the catalog knows runs on every target you ticked. The searches
-            card shows each search&rsquo;s placement.
+            sorted using the dataset catalog. A Lakehouse test runs only the searches over
+            Lakehouse datasets, and a federated test runs only the searches over remote ones. A
+            search the current test will not run stays on the card, marked as skipped, with what to
+            change. A search that names both kinds, a wildcard, or nothing the catalog knows runs in
+            either test, and each run is filed by where the server says it executed.
           </li>
           <li>
             <b>The server&rsquo;s account files the run.</b> After every run the app reads the
@@ -335,7 +353,8 @@ export default function DocsPage() {
             of the data (for example a Lakehouse dataset and the S3 bucket it was archived from).
             Analysis and Compare look at one search at a time, so link the two first: open either
             one on <b>Manage searches</b> and set its <b>Counterpart</b> to the other. Select both,
-            tick a size and Federated, and run one session. In Analysis or Compare, pick either
+            then run one session as a Lakehouse test and one as a federated test. Each test
+            runs only its half of the pair. In Analysis or Compare (all sessions), pick either
             search and leave <b>Include counterpart</b> on. The pair is then read as one case:
             each target&rsquo;s figures come from whichever search ran there, and the two are
             never blended. Set <b>Compare against</b> to Federated (or to a size) to get the

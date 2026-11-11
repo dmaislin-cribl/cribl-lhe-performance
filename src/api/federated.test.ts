@@ -214,3 +214,29 @@ describe('describeCompute', () => {
     expect(describeCompute({})).toBe('');
   });
 });
+
+describe('groupDatasets', () => {
+  it('groups Lakehouse first, then each federated storage type, then meta datasets', async () => {
+    const { groupDatasets } = await import('./federated');
+    const catalog = buildCatalog([
+      { id: 'zeta_lh', type: 'cribl_search', provider: 'lakehouse' },
+      { id: 'alpha_lh', type: 'cribl_search', provider: 'lakehouse' },
+      { id: 'flows_gcs', type: 'gcs' },
+      { id: 'pos_s3', type: 's3' },
+      { id: 'blob', type: 'azure_blob' },
+      { id: 'logs', type: 'cribl_lake' },
+      { id: 'weird', type: 'some_new_type' },
+      { id: 'default', type: 'cribl_meta', datasets: ['pos_s3'] },
+    ]);
+    expect(groupDatasets(catalog).map((group) => [group.label, group.ids])).toEqual([
+      ['Lakehouse', ['alpha_lh', 'zeta_lh']],
+      ['Federated · Amazon S3', ['pos_s3']],
+      ['Federated · Azure Blob Storage', ['blob']],
+      ['Federated · Google Cloud Storage', ['flows_gcs']],
+      ['Federated · Cribl Lake', ['logs']],
+      ['Federated · some_new_type', ['weird']],
+      ['Other (resolves to other datasets)', ['default']],
+    ]);
+    expect(groupDatasets(null)).toEqual([]);
+  });
+});

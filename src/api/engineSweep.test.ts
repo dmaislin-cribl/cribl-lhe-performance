@@ -104,6 +104,8 @@ describe('describeSweep', () => {
     const plan = planSweep({ selected: ['small', 'large'], currentTier: 'small', ...shape });
     expect(describeSweep(plan)).toContain('Small → Large');
     expect(describeSweep(plan)).toContain('1 resize');
+    expect(describeSweep(plan)).toMatch(/\d+ runs$/);
+    expect(describeSweep(planSweep({ selected: ['small'], currentTier: 'small', ...shape }))).toContain('no resize');
   });
 
   it('says so when nothing is selected', () => {
@@ -176,7 +178,7 @@ describe('federated target', () => {
       runsPerWindow: [4],
     });
     expect(validateSweep({ selected: ['medium', 'federated'], hasSearches: true, steps: plan.steps })).toMatch(
-      /Federated is ticked/,
+      /federated test has nothing to run/,
     );
     const sizesOnly = planSweep({
       selected: ['medium'],
@@ -186,7 +188,7 @@ describe('federated target', () => {
       runsPerWindow: [4],
     });
     expect(validateSweep({ selected: ['medium'], hasSearches: true, steps: sizesOnly.steps })).toMatch(
-      /federated data/,
+      /Lakehouse test has nothing to run/,
     );
   });
 });

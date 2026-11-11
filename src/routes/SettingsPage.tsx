@@ -8,7 +8,7 @@ import {
   type LabConfig,
 } from '../api/appSettings';
 import { P95_MIN_SAMPLES } from '../api/stats';
-import { MEASURE_TARGETS, describeTier, isFederated, labelTier, tierDef } from '../api/tiers';
+import { ENGINE_TIERS, describeTier, labelTier, tierDef } from '../api/tiers';
 import {
   MAX_SPAN_COUNT,
   MAX_WINDOWS,
@@ -339,9 +339,9 @@ export default function SettingsPage() {
         when you want to keep the old numbers comparable.
       </span>
 
-      <label>What to test on</label>
+      <label>Engine sizes to test</label>
       <div className={s.tierGrid}>
-        {MEASURE_TARGETS.map((tier) => {
+        {ENGINE_TIERS.map((tier) => {
           const def = tierDef(tier);
           const picked = config.sweepTiers.includes(tier);
           return (
@@ -359,10 +359,7 @@ export default function SettingsPage() {
                 }
               />
               <span>
-                {labelTier(tier)}{' '}
-                <span className={s.tierNote}>
-                  {isFederated(tier) ? 'searches over remote data · no resize' : describeTier(tier)}
-                </span>
+                {labelTier(tier)} <span className={s.tierNote}>{describeTier(tier)}</span>
                 {def?.byRequest && <span className={s.tierNote}> · by request</span>}
               </span>
             </label>

@@ -301,6 +301,60 @@ export function deleteSearch(library: SearchLibrary, id: string): SearchLibrary 
   };
 }
 
+/**
+ * The search with its dataset term pointed at `datasetId`. Replaces the first
+ * `dataset=` term whatever its quoting, or adds one when there is none — at the
+ * front, on its own line when the text starts with a pipe. Everything else in
+ * the search is left exactly as written.
+ */
+export function withDataset(text: string, datasetId: string): string {
+  const term = `dataset="${datasetId}"`;
+  const pattern = /\bdataset\s*=\s*(?:"[^"]*"|'[^']*'|[A-Za-z0-9_.*,:-]+)/i;
+  if (pattern.test(text)) return text.replace(pattern, term);
+  const body = text.trimStart();
+  if (!body) return term;
+  return body.startsWith('|') ? `${term}\n${body}` : `${term} ${body}`;
+}
+
+/**
+ * Point a saved search at another dataset, from the workbench picker.
+ *
+ * A search that already has measured runs is **not** edited: Analysis and
+ * Compare group runs by search, so retargeting it in place would pool timings
+ * from two datasets into one distribution under one name. Instead a copy named
+ * for the new dataset takes its place in the run selection, and the original —
+ * with its runs — stays as it was. A search with no runs is simply edited.
+ */
+export function retargetSearch(
+  library: SearchLibrary,
+  id: string,
+  datasetId: string,
+  hasRuns: boolean,
+  nowMs = Date.now(),
+): { library: SearchLibrary; searchId: string; copied: boolean } {
+  const source = library.searches.find((entry) => entry.id === id);
+  if (!source || deriveDataset(source.text) === datasetId) return { library, searchId: id, copied: false };
+  const text = withDataset(source.text, datasetId);
+  if (!hasRuns) {
+    return { library: upsertSearch(library, { ...source, text }, nowMs), searchId: id, copied: false };
+  }
+  if (library.searches.length >= MAX_SEARCHES) return { library, searchId: id, copied: false };
+  const base = source.name.replace(/ · [^·]+$/, '');
+  const created = makeSearch(
+    { name: uniqueName(library, `${base} · ${datasetId}`.slice(0, MAX_NAME_LENGTH)), text, notes: source.notes },
+    nowMs,
+  );
+  return {
+    library: {
+      searches: [...library.searches, created],
+      // The copy takes the original's place in the run selection and order.
+      selectedIds: library.selectedIds.map((entry) => (entry === id ? created.id : entry)),
+    },
+    searchId: created.id,
+    copied: true,
+  };
+}
+
 /** The search's counterpart, or null when it has none. */
 export function counterpartOf(library: SearchLibrary, id: string): SavedSearch | null {
   const search = library.searches.find((entry) => entry.id === id);

@@ -258,6 +258,57 @@ export function buildCatalog(items: unknown): DatasetCatalog {
   return catalog;
 }
 
+/** Friendly group names for the dataset picker, by dataset `type`. */
+const TYPE_GROUPS: Record<string, string> = {
+  s3: 'Amazon S3',
+  azure_blob: 'Azure Blob Storage',
+  gcs: 'Google Cloud Storage',
+  cribl_lake: 'Cribl Lake',
+  cribl_edge: 'Cribl Edge',
+  cribl_leader: 'Cribl internal',
+  api_http: 'HTTP API',
+  api_log_analytics: 'Azure Log Analytics',
+};
+
+export interface DatasetGroup {
+  /** Shown as the optgroup label, e.g. "Federated · Amazon S3". */
+  label: string;
+  placement: 'lakehouse' | 'federated' | 'other';
+  ids: string[];
+}
+
+/**
+ * The catalog arranged for a picker: Lakehouse first, then each federated
+ * storage type, then anything that is neither (meta datasets such as `default`,
+ * which resolve to other datasets). Ids sorted within a group; groups in a
+ * fixed order so the list does not reshuffle between visits.
+ */
+export function groupDatasets(catalog: DatasetCatalog | null): DatasetGroup[] {
+  if (!catalog) return [];
+  const lakehouse: string[] = [];
+  const other: string[] = [];
+  const federated = new Map<string, string[]>();
+  for (const def of catalog.values()) {
+    if (def.type === 'cribl_meta') other.push(def.id);
+    else if (classifyDataset(catalog, def.id) === 'lakehouse') lakehouse.push(def.id);
+    else {
+      const label = TYPE_GROUPS[def.type ?? ''] ?? def.type ?? 'Other storage';
+      federated.set(label, [...(federated.get(label) ?? []), def.id]);
+    }
+  }
+  const sort = (ids: string[]) => [...ids].sort((a, b) => a.localeCompare(b));
+  const order = Object.values(TYPE_GROUPS);
+  const groups: DatasetGroup[] = [];
+  if (lakehouse.length) groups.push({ label: 'Lakehouse', placement: 'lakehouse', ids: sort(lakehouse) });
+  for (const label of [...federated.keys()].sort(
+    (a, b) => (order.indexOf(a) === -1 ? 99 : order.indexOf(a)) - (order.indexOf(b) === -1 ? 99 : order.indexOf(b)) || a.localeCompare(b),
+  )) {
+    groups.push({ label: `Federated · ${label}`, placement: 'federated', ids: sort(federated.get(label) ?? []) });
+  }
+  if (other.length) groups.push({ label: 'Other (resolves to other datasets)', placement: 'other', ids: sort(other) });
+  return groups;
+}
+
 /**
  * Lakehouse or federated for one dataset id, or null when the catalog does not
  * know it. A `cribl_meta` dataset is resolved through its members.
