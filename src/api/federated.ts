@@ -357,6 +357,23 @@ function combine(placements: (SearchPlacement | null)[]): SearchPlacement {
   return [...set][0] as SearchPlacement;
 }
 
+/** Where each selected search will run, as the searches card labels it. */
+export const PLACEMENT_LABEL: Record<SearchPlacement, string> = {
+  lakehouse: 'Lakehouse',
+  federated: 'Federated',
+  mixed: 'Mixed',
+  unknown: 'Unclassified',
+};
+
+export const PLACEMENT_HINT: Record<SearchPlacement, string> = {
+  lakehouse: 'Reads a Lakehouse dataset: measured on the engine sizes you tick.',
+  federated:
+    'Reads remote data (S3, Azure Blob, GCS, Lake, Edge, API …): measured on Federated only — no engine size changes how it runs.',
+  mixed: 'Reads both Lakehouse and federated datasets: measured on every target you tick.',
+  unknown:
+    'The dataset could not be classified (wildcard, no dataset= term, or catalog unavailable): measured on every target, and filed by where the server says it actually ran.',
+};
+
 /**
  * Where a saved search is expected to run. `unknown` covers every case the text
  * cannot settle on its own — no `dataset=` term, a wildcard, an id the catalog

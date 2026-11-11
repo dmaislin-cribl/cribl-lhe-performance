@@ -109,3 +109,14 @@
 }
 
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+/* Kind filter over the list: All / Lakehouse / Federated, with counts. */
+.kindFilter { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 0 0 10px; }
+.kindFilter button { padding: 5px 6px; font-size: 12px; border: 1px solid var(--cds-color-border); border-radius: 4px; background: var(--cds-color-bg); color: var(--cds-color-fg); cursor: pointer; }
+.kindFilter .kindActive { border-color: var(--cds-color-accent); box-shadow: inset 0 0 0 1px var(--cds-color-accent); font-weight: 600; }
+.kindCount { color: var(--cds-color-fg-muted); font-weight: 400; }
+
+/* Which kind each search is, beside its name. Federated wears its chart hue. */
+.kindTag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 10px; font-size: 10px; font-weight: 700; background: var(--cds-color-bg-muted); color: var(--cds-color-fg-muted); vertical-align: 1px; }
+.kindTagLakehouse { color: var(--chart-5); }
+.kindTagFederated { color: var(--chart-federated); }

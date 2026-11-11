@@ -51,14 +51,14 @@ import {
 } from './api/tiers';
 import {
   attributeRun,
-  buildCatalog,
   classifyDataset,
   classifySearch,
   describeCompute,
   groupDatasets,
   waitedForCompute,
+  PLACEMENT_HINT,
+  PLACEMENT_LABEL,
   runsOnTarget,
-  type DatasetCatalog,
   type SearchPlacement,
 } from './api/federated';
 import {
@@ -70,6 +70,7 @@ import {
   upsertSession,
   type SessionRecord,
 } from './api/sessions';
+import { useDatasetCatalog } from './api/useDatasetCatalog';
 import s from './App.module.css';
 
 interface Engine {
@@ -96,23 +97,6 @@ const RESIZE_TIMEOUT_MS = 30 * 60_000;
 
 /** Per-resize allowance in the wall-clock estimate. Deliberately pessimistic. */
 const RESIZE_SETTLE_SEC = 180;
-
-/** Where each selected search will run, as the searches card labels it. */
-const PLACEMENT_LABEL: Record<SearchPlacement, string> = {
-  lakehouse: 'Lakehouse',
-  federated: 'Federated',
-  mixed: 'Mixed',
-  unknown: 'Unclassified',
-};
-
-const PLACEMENT_HINT: Record<SearchPlacement, string> = {
-  lakehouse: 'Reads a Lakehouse dataset: measured on the engine sizes you tick.',
-  federated:
-    'Reads remote data (S3, Azure Blob, GCS, Lake, Edge, API …): measured on Federated only — no engine size changes how it runs.',
-  mixed: 'Reads both Lakehouse and federated datasets: measured on every target you tick.',
-  unknown:
-    'The dataset could not be classified (wildcard, no dataset= term, or catalog unavailable): measured on every target, and filed by where the server says it actually ran.',
-};
 
 function runId(): string {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
@@ -195,13 +179,6 @@ export default function App() {
   const [advanced, setAdvanced] = useState(false);
   /** Session id the run table is narrowed to, or '' for every run. */
   const [runFilter, setRunFilter] = useState('');
-  /**
-   * Dataset catalog, used to sort selected searches into Lakehouse and federated
-   * before a run. Null until loaded, or when the read failed — in which case
-   * every search is "unknown", runs on every target, and is attributed from the
-   * server's job record afterwards.
-   */
-  const [catalog, setCatalog] = useState<DatasetCatalog | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -218,6 +195,13 @@ export default function App() {
     [engines],
   );
   const searchGroup = config.searchGroup;
+  /**
+   * Dataset catalog, used to sort selected searches into Lakehouse and federated
+   * before a run. Null until loaded, or when the read failed — in which case
+   * every search is "unknown", runs on every target, and is attributed from the
+   * server's job record afterwards.
+   */
+  const catalog = useDatasetCatalog(searchGroup);
   const chosen = useMemo(() => (library ? selectedSearches(library) : []), [library]);
 
   /**
@@ -239,24 +223,6 @@ export default function App() {
     () => (runFilter ? runs.filter((run) => run.sessionId === runFilter) : runs),
     [runs, runFilter],
   );
-
-  /**
-   * Read once per search group. Failure is not an error worth a banner: the
-   * classification it feeds is advisory, and attribution from the job record
-   * still files every run correctly.
-   */
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch(`${apiUrl().replace(/\/$/, '')}/m/${encodeURIComponent(searchGroup)}/search/datasets`, {
-      signal: controller.signal,
-    })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((body: { items?: unknown } | null) => setCatalog(body ? buildCatalog(body.items) : null))
-      .catch(() => {
-        if (!controller.signal.aborted) setCatalog(null);
-      });
-    return () => controller.abort();
-  }, [searchGroup]);
 
   /** Where each selected search is expected to run. */
   const placements = useMemo(() => {

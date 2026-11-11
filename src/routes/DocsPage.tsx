@@ -305,6 +305,12 @@ export default function DocsPage() {
           <li>Pick a time window and press <b>Time</b>.</li>
         </ol>
         <p>
+          On <b>Test searches</b>, each saved search is tagged Lakehouse or Federated from the
+          dataset it names, and the list can be filtered to either kind. When writing a search,
+          pick its dataset from the grouped <b>Dataset</b> list instead of typing it. The list
+          follows the filter, so filtering to Federated offers only federated datasets.
+        </p>
+        <p>
           Changing a search&rsquo;s dataset edits the search, unless it already has measured runs.
           Then a copy named for the new dataset takes its place, and the original keeps its runs.
           Otherwise Analysis would pool timings from two datasets under one search.

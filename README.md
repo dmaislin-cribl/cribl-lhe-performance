@@ -72,7 +72,7 @@ Nothing is required before first use. Everything below has a working default and
 ## How To Use
 
 ### Typical Workflow
-1. Open **Test searches** and add the searches you want to measure.
+1. Open **Test searches** and add the searches you want to measure. Each is tagged Lakehouse or Federated, the list filters by kind, and the editor's **Dataset** list offers your workspace's datasets grouped by where they live.
 2. On the workbench, choose a test type: **Lakehouse engine sizes** or **Federated search**.
 3. On each search, pick the **Dataset** to test. For a federated test, choose one under a "Federated" group.
 4. Pick a time window, or press **All windows**, and press **Time**.
