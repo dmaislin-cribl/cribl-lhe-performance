@@ -55,10 +55,21 @@ tool runs it automatically after install — same code path as
 `npm run provision` standalone.
 
 ```bash
-npm run deploy           # full pipeline
+npm run deploy           # full pipeline (bumps the patch version)
+VERSION=0.9.0 npm run deploy:version   # deploy as an exact version
 npm run provision        # reconcile scheduled searches only
 npm run provision -- --dry  # show plan without applying
 ```
+
+**Why `deploy` is not plain `cribl-app-deploy`:** that tool reads the
+version from `package.json`, *then* runs `npm run package` — and `apps
+package` bumps the patch version on every run. It then inspects the
+tarball for the version it read first, which no longer matches, and the
+deploy always fails with `pack identity … does not match package.json`.
+The scripts package first and pass the exact artifact with `--artifact`,
+which also skips the tool's own `verify`, so the scripts run `verify`
+themselves. The deploy target comes from `CRIBL_BASE_URL` in `.env` or
+the environment.
 
 The provisioner prints each action:
 
@@ -89,8 +100,12 @@ tag, in a clean working tree:
 npm run lint          # must pass — what the workflow gates on
 npm test              # unit tests
 npx tsc --noEmit      # type-check
-npm run package       # full build + tgz produced
+npm run package -- --version X.Y.Z   # full build + tgz, at the version you will tag
 ```
+
+Plain `npm run package` bumps the patch version, so after it
+`package.json` no longer matches the tag you meant to push — pass
+`--version` with the target version instead.
 
 If any step fails, do not tag. Fix on `master` first.
 
