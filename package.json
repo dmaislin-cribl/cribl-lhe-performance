@@ -1,6 +1,6 @@
 {
   "name": "cribl-lhe-performance",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "type": "module",
   "displayName": "Cribl Performance Testing",
   "description": "Run, compare, and review repeatable Cribl Search performance tests, on Lakehouse engine sizes and on federated search over remote data.",
