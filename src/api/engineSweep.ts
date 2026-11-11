@@ -37,16 +37,19 @@
  * forcing one dialog per step.
  */
 
-import { canonicalTier, labelTier, tierDef, tierIndex } from './tiers';
+import { canonicalTier, isFederated, labelTier, tierDef, tierIndex } from './tiers';
 
 export interface SweepStep {
   /** Engine size this step measures. */
   tier: string;
   /**
-   * Whether the engine has to be resized before this step. False only for a
-   * first step that is already the engine's current size.
+   * Whether the engine has to be resized before this step. False for the first
+   * size that is already the engine's current one, and always for Federated,
+   * which runs on the federated executors whatever size the engine is.
    */
   needsResize: boolean;
+  /** Searches this step runs — not every selected search belongs on every target. */
+  searches: number;
 }
 
 export interface SweepPlan {
@@ -71,6 +74,12 @@ export function planSweep(input: {
   currentTier: string;
   searches: number;
   /**
+   * Searches a given target runs, when that differs from `searches`. A size step
+   * skips searches over federated datasets — no engine size changes how they run
+   * — and the Federated step skips Lakehouse ones. See federated.ts.
+   */
+  searchesFor?: (tier: string) => number;
+  /**
    * Timed runs for each window in the run, one entry per window. An array rather
    * than a count × a repetition number, because windows can carry different
    * repetition counts — a 14-day window is minutes per run where the 1-hour window
@@ -78,7 +87,7 @@ export function planSweep(input: {
    */
   runsPerWindow: number[];
 }): SweepPlan {
-  const { selected, currentTier, searches, runsPerWindow } = input;
+  const { selected, currentTier, searches, runsPerWindow, searchesFor } = input;
   // Canonicalised before deduplication: `xxlarge` and `2xlarge` are one size, and
   // deduplicating the raw strings would measure it twice with a pointless resize
   // in between.
@@ -87,11 +96,13 @@ export function planSweep(input: {
   );
   const current = canonicalTier(currentTier);
 
-  const steps: SweepStep[] = unique.map((tier, index) => ({
+  // Federated sorts after every size (tierIndex), so the sizes are a prefix and
+  // the first of them is the only one that can already be in place.
+  const firstSize = unique.find((tier) => !isFederated(tier));
+  const steps: SweepStep[] = unique.map((tier) => ({
     tier,
-    // Only the first step can already be in place; every later step follows a
-    // resize by construction, because the list is deduplicated.
-    needsResize: !(index === 0 && tier === current),
+    needsResize: !isFederated(tier) && !(tier === firstSize && tier === current),
+    searches: searchesFor ? searchesFor(tier) : searches,
   }));
 
   // One unmeasured warm-up per window on top of its timed runs.
@@ -100,7 +111,7 @@ export function planSweep(input: {
   return {
     steps,
     resizes: steps.filter((step) => step.needsResize).length,
-    totalRuns: steps.length * searches * runsPerSearch,
+    totalRuns: steps.reduce((sum, step) => sum + step.searches * runsPerSearch, 0),
     byRequest: unique.filter((tier) => tierDef(tier)?.byRequest),
     unconfirmed: unique.filter((tier) => {
       const def = tierDef(tier);
@@ -126,10 +137,24 @@ export function planSweep(input: {
  *
  * Returns null when the sweep may proceed.
  */
-export function validateSweep(input: { selected: string[]; hasSearches: boolean }): string | null {
-  const { selected, hasSearches } = input;
+export function validateSweep(input: {
+  selected: string[];
+  hasSearches: boolean;
+  /** The planned steps, when known, so a target with nothing to run is caught up front. */
+  steps?: SweepStep[];
+}): string | null {
+  const { selected, hasSearches, steps } = input;
   if (!selected.length) return 'Select at least one engine size to test.';
   if (!hasSearches) return 'Select at least one search to measure.';
+  // A target with no searches would resize (or not) and then time nothing — an
+  // empty column that reads like a measurement nobody took.
+  const empty = (steps ?? []).filter((step) => step.searches === 0);
+  if (empty.some((step) => isFederated(step.tier))) {
+    return 'Federated is ticked, but none of the selected searches read a federated dataset (S3, Azure Blob, GCS, Cribl Lake, Edge, API …). Select one, or untick Federated.';
+  }
+  if (empty.length) {
+    return `${empty.map((step) => labelTier(step.tier)).join(', ')} ${empty.length === 1 ? 'is' : 'are'} ticked, but every selected search reads federated data, which no engine size affects. Select a Lakehouse search, or tick only Federated.`;
+  }
   return null;
 }
 

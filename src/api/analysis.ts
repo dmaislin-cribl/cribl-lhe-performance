@@ -35,15 +35,41 @@ import {
   sampleHealth,
   throughputPerSec,
 } from './perfStats';
+import { waitedForCompute } from './federated';
 import { canonicalTier, tierIndex } from './tiers';
 
-/** Which server-reported timing the analysis runs on. */
-export type AnalysisMetric = 'total' | 'engine';
+/**
+ * Which server-reported figure the analysis runs on. `cpu` is billable
+ * CPU-seconds — the cost of a federated search, stored in ms so every statistic
+ * and formatter here applies unchanged. Lakehouse runs report 0 for it, because
+ * Lakehouse is billed by engine size instead.
+ */
+export type AnalysisMetric = 'total' | 'engine' | 'cpu';
 
-export const METRIC_FIELD: Record<AnalysisMetric, 'totalMs' | 'engineMs'> = {
+type MetricField = 'totalMs' | 'engineMs' | 'billableCpuMs';
+
+export const METRIC_FIELD: Record<AnalysisMetric, MetricField> = {
   total: 'totalMs',
   engine: 'engineMs',
+  cpu: 'billableCpuMs',
 };
+
+/**
+ * Which runs to include by whether they waited for compute nodes. That wait is
+ * the largest single source of federated variance, so pooling waiting runs with
+ * ready ones widens every interval and can hide a real difference.
+ * `exclude-wait` keeps runs the server did not report on (every Lakehouse and
+ * compute v1 run), because "not reported" is not evidence of a wait.
+ */
+export type ComputeFilter = 'all' | 'exclude-wait' | 'wait-only';
+
+export function filterByCompute(runs: RunRecord[], filter: ComputeFilter = 'all'): RunRecord[] {
+  if (filter === 'all') return runs;
+  return runs.filter((run) => {
+    const waited = waitedForCompute(run.computeWaitMs);
+    return filter === 'wait-only' ? waited === true : waited !== true;
+  });
+}
 
 export interface BaselineComparison {
   /** Hodges-Lehmann shift, ms. Negative means this size was faster. */
@@ -80,10 +106,12 @@ export interface AnalysisScope {
   baseline: string;
   budgetMs: number | null;
   budgetStatistic: BudgetStatistic;
+  /** Executor start state to include. Defaults to every run. */
+  compute?: ComputeFilter;
 }
 
 /** Measured, successful, and carrying the timing the scope asks for. */
-function timings(runs: RunRecord[], field: 'totalMs' | 'engineMs'): number[] {
+function timings(runs: RunRecord[], field: MetricField): number[] {
   return runs
     .map((run) => run[field])
     .filter((value): value is number => typeof value === 'number');
@@ -109,7 +137,7 @@ export function scopeRuns(runs: RunRecord[], searchId: string, windowId: string)
  */
 export function analyzeByTier(runs: RunRecord[], scope: AnalysisScope): SizeAnalysis[] {
   const field = METRIC_FIELD[scope.metric];
-  const inScope = scopeRuns(runs, scope.searchId, scope.windowId);
+  const inScope = filterByCompute(scopeRuns(runs, scope.searchId, scope.windowId), scope.compute);
 
   const byTier = new Map<string, RunRecord[]>();
   for (const run of inScope) {

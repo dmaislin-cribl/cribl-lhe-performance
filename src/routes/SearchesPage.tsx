@@ -27,6 +27,7 @@ import {
   saveLibrary,
   searchWarnings,
   selectOnly,
+  setCounterpart,
   toggleSelected,
   uniqueName,
   upsertSearch,
@@ -248,6 +249,8 @@ export default function SearchesPage() {
                     {runnable
                       ? `${deriveDataset(entry.text) || 'no dataset term'} · ${countRuns(runs, entry.id)} measured runs`
                       : 'empty draft — not runnable'}
+                    {entry.counterpartId &&
+                      ` · paired with ${library.searches.find((other) => other.id === entry.counterpartId)?.name ?? '?'}`}
                   </span>
                 </button>
               </div>
@@ -359,6 +362,45 @@ export default function SearchesPage() {
           <span className={s.hint}>
             What this case is meant to exercise. Kept with the search, never measured.
           </span>
+
+          {editing && (
+            <>
+              <label htmlFor="counterpart">Counterpart</label>
+              <select
+                id="counterpart"
+                className={s.field}
+                value={editing.counterpartId ?? ''}
+                onChange={(event) => {
+                  const otherId = event.target.value;
+                  const other = library.searches.find((entry) => entry.id === otherId);
+                  void commit(
+                    setCounterpart(library, editing.id, otherId),
+                    other
+                      ? `Paired “${editing.name}” with “${other.name}”.`
+                      : `“${editing.name}” is no longer paired.`,
+                  );
+                }}
+              >
+                <option value="">None</option>
+                {library.searches
+                  .filter((entry) => entry.id !== editing.id)
+                  .map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.name}
+                      {entry.counterpartId && entry.counterpartId !== editing.id
+                        ? ' (re-pairs it)'
+                        : ''}
+                    </option>
+                  ))}
+              </select>
+              <span className={s.hint}>
+                The same question asked of the other copy of the data, for example this Lakehouse
+                search and the federated search over the S3 bucket it was archived from. Analysis and
+                Compare then read the two as one case across engine sizes and Federated. Saved
+                straight away, and applies to runs already recorded.
+              </span>
+            </>
+          )}
 
           {editingRuns > 0 && dirty && (
             <p className={s.note}>

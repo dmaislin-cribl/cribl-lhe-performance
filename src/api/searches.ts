@@ -61,6 +61,14 @@ export interface SavedSearch {
   text: string;
   /** Operator notes: what this case is meant to exercise. */
   notes: string;
+  /**
+   * The same question asked of the other copy of the data — typically a
+   * Lakehouse search and the federated search over the bucket it was archived
+   * from. Always mutual: if A names B, B names A (`setCounterpart` keeps it so,
+   * `normalizeLibrary` drops a link that is not). Analysis and Compare use it to
+   * read the pair as one test case across targets; see pairs.ts.
+   */
+  counterpartId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -152,10 +160,28 @@ export function normalizeLibrary(stored: Partial<SearchLibrary> | null): SearchL
       name: asString(candidate.name, 'Untitled search').slice(0, MAX_NAME_LENGTH),
       text,
       notes: typeof candidate.notes === 'string' ? candidate.notes : '',
+      ...(typeof candidate.counterpartId === 'string' && candidate.counterpartId
+        ? { counterpartId: candidate.counterpartId }
+        : {}),
       createdAt: created,
       updatedAt: asString(candidate.updatedAt, created),
     });
     if (searches.length >= MAX_SEARCHES) break;
+  }
+
+  // A counterpart link survives only when it is mutual and both ends exist; a
+  // one-sided link would pair A with B in one view and leave B unpaired in the
+  // next, and the same comparison would read differently depending on which
+  // member was picked.
+  const byId = new Map(searches.map((entry) => [entry.id, entry]));
+  for (const [index, entry] of searches.entries()) {
+    if (!entry.counterpartId) continue;
+    const other = byId.get(entry.counterpartId);
+    if (!other || other.id === entry.id || other.counterpartId !== entry.id) {
+      const { counterpartId: _dropped, ...rest } = entry;
+      void _dropped;
+      searches[index] = rest;
+    }
   }
 
   // Only runnable searches can be selected, so a stale selection cannot make the
@@ -267,10 +293,48 @@ export function upsertSearch(
  */
 export function deleteSearch(library: SearchLibrary, id: string): SearchLibrary {
   if (!library.searches.some((entry) => entry.id === id)) return library;
+  // Unpair first, so the survivor does not keep pointing at a deleted search.
+  const unpaired = setCounterpart(library, id, '');
   return {
-    searches: library.searches.filter((entry) => entry.id !== id),
+    searches: unpaired.searches.filter((entry) => entry.id !== id),
     selectedIds: library.selectedIds.filter((entry) => entry !== id),
   };
+}
+
+/** The search's counterpart, or null when it has none. */
+export function counterpartOf(library: SearchLibrary, id: string): SavedSearch | null {
+  const search = library.searches.find((entry) => entry.id === id);
+  if (!search?.counterpartId) return null;
+  return library.searches.find((entry) => entry.id === search.counterpartId) ?? null;
+}
+
+/**
+ * Pair two searches, or unpair one (`otherId` empty). Symmetric, and one
+ * counterpart each: pairing A with C unpairs A from B and C from whatever it had,
+ * so no search is ever left pointing at a partner that points elsewhere.
+ */
+export function setCounterpart(library: SearchLibrary, id: string, otherId: string): SearchLibrary {
+  const ids = new Set(library.searches.map((entry) => entry.id));
+  if (!ids.has(id) || otherId === id || (otherId && !ids.has(otherId))) return library;
+  const previous = new Set(
+    [id, otherId]
+      .filter(Boolean)
+      .map((member) => library.searches.find((entry) => entry.id === member)?.counterpartId)
+      .filter((value): value is string => Boolean(value)),
+  );
+  const searches = library.searches.map((entry) => {
+    if (entry.id === id) return withCounterpart(entry, otherId);
+    if (otherId && entry.id === otherId) return withCounterpart(entry, id);
+    if (previous.has(entry.id)) return withCounterpart(entry, '');
+    return entry;
+  });
+  return { ...library, searches };
+}
+
+function withCounterpart(search: SavedSearch, counterpartId: string): SavedSearch {
+  const { counterpartId: _old, ...rest } = search;
+  void _old;
+  return counterpartId ? { ...rest, counterpartId } : rest;
 }
 
 /** Copy, so a variant can be measured without editing a case already run. */

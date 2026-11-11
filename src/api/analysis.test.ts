@@ -204,3 +204,13 @@ describe('defaultScope', () => {
     expect(defaultScope([])).toEqual({ searchId: null, windowId: null });
   });
 });
+
+describe('filterByCompute', () => {
+  it('splits compute waits out without treating "not reported" as a wait', async () => {
+    const { filterByCompute } = await import('./analysis');
+    const runs = [{ computeWaitMs: 28_000 }, { computeWaitMs: 0 }, { computeWaitMs: null }, {}] as never[];
+    expect(filterByCompute(runs, 'all')).toHaveLength(4);
+    expect(filterByCompute(runs, 'wait-only')).toHaveLength(1);
+    expect(filterByCompute(runs, 'exclude-wait')).toHaveLength(3);
+  });
+});

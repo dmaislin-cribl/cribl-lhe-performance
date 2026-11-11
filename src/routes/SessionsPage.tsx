@@ -35,7 +35,7 @@ import {
 } from '../api/sessions';
 import { sessionCoverage, sessionResults } from '../api/sessionResults';
 import { formatSec } from '../api/stats';
-import { ENGINE_TIERS, describeTier, labelTier } from '../api/tiers';
+import { MEASURE_TARGETS, describeTier, labelTier } from '../api/tiers';
 import StatusBanner from '../components/StatusBanner';
 import s from './SessionsPage.module.css';
 
@@ -223,7 +223,7 @@ export default function SessionsPage() {
         // hundreds of sessions and the run log is capped at 2000 runs, so
         // summarising every session on every render would be work nobody reads.
         const cells = showResults
-          ? sessionResults(log.runs, session, windowOrder, ENGINE_TIERS)
+          ? sessionResults(log.runs, session, windowOrder, MEASURE_TARGETS)
           : [];
         const coverage = sessionCoverage(cells);
         return (

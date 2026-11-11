@@ -29,6 +29,15 @@
  */
 
 import { apiUrl } from './cribl';
+import {
+  EMPTY_INSIGHT,
+  NO_COMPUTE_WAIT,
+  findJob,
+  parseJobInsight,
+  trackComputeWait,
+  type ComputeWait,
+  type JobInsight,
+} from './federated';
 
 /** Default search worker group. Overridable per call — policies.yml is
  *  written for any `:gid`, so nothing requires it to be `default_search`. */
@@ -81,6 +90,18 @@ export interface TimedRun {
   /** Bounds as the server echoed them, so a misread window is visible in the log. */
   echoedEarliest: number | string | null;
   echoedLatest: number | string | null;
+  /**
+   * Where and how the job ran, from the job record: execution path, billable
+   * CPU, executor fan-out, providers, cache. Read after the job finished, so it
+   * costs nothing against the timing — which is server-side anyway.
+   */
+  insight: JobInsight;
+  /**
+   * Compute nodes the job waited for, sampled on every poll — the field is live
+   * and reads 0/0 once a job finishes, so it cannot be read afterwards. See
+   * federated.ts.
+   */
+  computeWait: ComputeWait;
 }
 
 export interface TimedRunOptions {
@@ -220,6 +241,38 @@ async function call(
 }
 
 /**
+ * Job insight: path, providers and cache from the record already in hand, plus
+ * CPU from the job list — the single-job read never carries `cpuMetrics`, the
+ * list does (see federated.ts). One list read per run, after it finished, so it
+ * costs nothing against the timing. Never throws: the timing is the
+ * measurement, and losing it because a provenance read failed would be the
+ * wrong trade.
+ */
+async function readInsight(
+  group: string,
+  jobId: string,
+  known: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<JobInsight> {
+  if (known.cpuMetrics && known.metadata) return parseJobInsight(known);
+  const fallback = known.metadata ? parseJobInsight(known) : EMPTY_INSIGHT;
+  try {
+    // Bounded to jobs created from just before this one, so the list is short and
+    // this job is in it however busy the workspace is.
+    const created = typeof known.timeCreated === 'number' ? known.timeCreated : Date.now() - 600_000;
+    const since = encodeURIComponent(new Date(created - 1000).toISOString());
+    const listed = findJob(
+      JSON.parse(await call(group, 'GET', `/jobs?offset=0&limit=100&earliest=${since}`, undefined, signal)),
+      jobId,
+    );
+    return listed ? parseJobInsight({ ...known, ...listed }) : fallback;
+  } catch {
+    if (signal?.aborted) throw new PerfRunError('Run canceled');
+    return fallback;
+  }
+}
+
+/**
  * Run one search job and report the engine's own execution time.
  *
  * Bounds must already be absolute (see windows.ts) so that repetitions of the
@@ -253,6 +306,11 @@ export async function runTimedQuery(query: string, options: TimedRunOptions): Pr
 
   try {
     let status = typeof created.status === 'string' ? created.status : 'queued';
+    // The last job record seen. A terminal poll usually already carries
+    // cpuMetrics and metadata, which saves the extra read below.
+    let lastJob: Record<string, unknown> = created;
+    let computeWait = trackComputeWait(NO_COMPUTE_WAIT, created, 0);
+    let lastPollAt = performance.now();
     const deadline = Date.now() + timeoutMs;
     while (!isTerminal(status)) {
       if (Date.now() >= deadline) {
@@ -262,6 +320,10 @@ export async function runTimedQuery(query: string, options: TimedRunOptions): Pr
       await sleep(pollIntervalMs, signal);
       const polled = firstItem(JSON.parse(await call(searchGroup, 'GET', jobPath, undefined, signal)));
       status = typeof polled.status === 'string' ? polled.status : status;
+      lastJob = polled;
+      const now = performance.now();
+      computeWait = trackComputeWait(computeWait, polled, now - lastPollAt);
+      lastPollAt = now;
     }
 
     // Fetch results even on a non-completed status: the header still carries
@@ -281,9 +343,13 @@ export async function runTimedQuery(query: string, options: TimedRunOptions): Pr
       throw new PerfRunError(`Job ${jobId} ended with status: ${status}`, jobId);
     }
 
+    const insight = await readInsight(searchGroup, jobId, lastJob, signal);
+
     return {
       jobId,
       status,
+      insight,
+      computeWait,
       totalMs: span(job.timeCreated, job.timeCompleted),
       engineMs: span(job.timeStarted, job.timeCompleted),
       queueMs: span(job.timeCreated, job.timeStarted),

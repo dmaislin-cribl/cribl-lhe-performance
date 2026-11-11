@@ -123,6 +123,36 @@ export interface RunRecord {
    */
   sessionId: string;
   sessionName: string;
+  /**
+   * How the job ran, from the server's job record — see federated.ts. Optional
+   * because runs recorded before federated support have none of it, and absent
+   * must read as "not reported", never as zero.
+   *
+   * `path` is where the server says the job executed. `engine` above is filed
+   * from it, so a federated run is never counted as a measurement of an engine
+   * size even when a size sweep launched it.
+   */
+  path?: 'lakehouse' | 'federated' | 'mixed' | '';
+  /** Billable CPU, ms. Federated searches are billed on this; Lakehouse reports 0. */
+  billableCpuMs?: number | null;
+  /** Total CPU across coordinator and executors, ms. */
+  totalCpuMs?: number | null;
+  /** Executors the job fanned out to, coordinator excluded. */
+  executors?: number | null;
+  /**
+   * Most cold / warm compute nodes the job was waiting for at once, and how long
+   * it waited, ms — sampled while it ran, since the server's field is live and
+   * reads 0/0 at completion. Null where the job never reported node statuses
+   * (Lakehouse, compute v1).
+   */
+  computeCold?: number | null;
+  computeWarm?: number | null;
+  computeWaitMs?: number | null;
+  /** Provider types touched (`s3`, `azure_blob`, `cribl_search` …). */
+  providerTypes?: string[];
+  /** Compute types (`local`, `v1`, `v2`). */
+  computeTypes?: string[];
+  cache?: 'hit' | 'miss' | 'mixed' | '';
 }
 
 export interface RunLog {

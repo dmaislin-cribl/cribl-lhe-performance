@@ -102,3 +102,8 @@
 }
 .empty h2 { font-size: 16px; margin: 0 0 8px; color: var(--cds-color-fg); }
 .empty p { margin: 0 auto; max-width: 560px; font-size: 13px; line-height: 1.65; }
+
+/* Pairing a search with its counterpart sits under the search picker it modifies. */
+.pairToggle { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; color: var(--cds-color-fg-muted); }
+.pairToggle input { width: auto; margin: 0; padding: 0; }
+.pairNotes { margin: 0 0 16px; padding-left: 18px; font-size: 13px; line-height: 1.6; }

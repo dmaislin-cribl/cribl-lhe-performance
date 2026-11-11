@@ -59,3 +59,7 @@
 
 .empty { color: var(--cds-color-fg-muted); padding: 28px; text-align: center; }
 .note { color: var(--cds-color-fg-muted); font-size: 12px; margin-top: 12px; }
+
+/* Pairing a search with its counterpart sits under the search picker it modifies. */
+.pairToggle { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 6px; color: var(--cds-color-fg-muted); }
+.pairToggle input { width: auto; margin: 0; padding: 0; }

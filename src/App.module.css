@@ -99,3 +99,8 @@ table { width:100%; border-collapse:collapse; font-size:13px; }th { text-align:l
   padding: 8px 11px; font-size: 12px; line-height: 1.55; margin: 12px 0 0;
 }
 .sweepSteps { margin: 0 0 12px; padding-left: 22px; font-size: 13px; line-height: 1.7; }
+
+/* Federated sits in the target list but is not a size: its own hue, marked on the
+   edge rather than filled, so it never reads as the "current" size badge. */
+.tierFederated { border-left: 3px solid var(--chart-federated); }
+.tierFederated > span { background: transparent; color: var(--chart-federated); font-weight: 700; }

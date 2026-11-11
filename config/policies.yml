@@ -11,3 +11,7 @@ policies:
     actions: ['GET']
   - object: '/m/:gid/search/local_search/engines/*'
     actions: ['PATCH']
+  # Dataset catalog, read-only: sorts saved searches into Lakehouse and federated
+  # before a run, so each target only times the searches it can affect.
+  - object: '/m/:gid/search/datasets'
+    actions: ['GET']

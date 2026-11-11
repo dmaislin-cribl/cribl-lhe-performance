@@ -40,6 +40,7 @@ const SECTIONS: Section[] = [
   { id: 'windows', title: 'Time windows' },
   { id: 'repetitions', title: 'Repetitions and the statistics they buy' },
   { id: 'sizes', title: 'Engine sizes and sweeps' },
+  { id: 'federated', title: 'Federated search' },
   { id: 'sessions', title: 'Sessions and reading results' },
   { id: 'analysis', title: 'Analysis: is the difference real?' },
   { id: 'defensible', title: 'Before you show a customer' },
@@ -278,6 +279,69 @@ export default function DocsPage() {
           <li>
             <b>The original size is restored afterwards</b> by default, so a sweep that ends on the
             largest size does not leave capacity parked at the top until somebody notices.
+          </li>
+        </ul>
+      </section>
+
+      <section className={s.block} id="federated">
+        <h2>Federated search</h2>
+        <p>
+          <b>Federated</b> is a target beside the engine sizes. It measures searches over data
+          that stays where it is (S3, Azure Blob, GCS, Cribl Lake, Edge, API and Log Analytics
+          datasets), run by Cribl Search&rsquo;s federated executors and not by a Lakehouse
+          engine. Tick it in the target list. It runs after the sizes and never resizes anything.
+        </p>
+        <ul>
+          <li>
+            <b>The dataset decides where a search runs, not this app.</b> Nothing sent with a
+            search says &ldquo;run this federated&rdquo;. So before a run, each selected search is
+            sorted using the dataset catalog. Searches over Lakehouse datasets run on the sizes you
+            ticked, because no federated setting affects them. Searches over remote datasets run on
+            Federated, because no engine size affects them. A search that names both kinds, a
+            wildcard, or nothing the catalog knows runs on every target you ticked. The searches
+            card shows each search&rsquo;s placement.
+          </li>
+          <li>
+            <b>The server&rsquo;s account files the run.</b> After every run the app reads the
+            job record. If it reports federated compute (<code>v1</code>/<code>v2</code>), the
+            run is filed under Federated. If it reports Lakehouse compute (<code>local</code>), the
+            run is filed under the size the engine was on. A catalog that was wrong never puts a
+            measurement in the wrong column, and the run&rsquo;s notes say when the filing differed
+            from the plan.
+          </li>
+          <li>
+            <b>Cost is recorded with time.</b> Federated searches are billed per CPU-second, so each
+            run records <b>billable CPU</b>, the number of <b>executors</b> it fanned out to, the
+            provider and compute version, and whether the cache was hit. Lakehouse runs report 0
+            billable CPU, because Lakehouse is billed by engine size. Analysis can use billable
+            CPU as its metric, so the significance test applies to cost as well as speed. Start-up
+            costs money too: the S3 run that waited cost 60&nbsp;CPU-seconds, against about 20
+            for each warm run after it.
+          </li>
+          <li>
+            <b>Waiting for compute is measured, not hidden.</b> While a federated job runs, it
+            reports how many compute nodes it is still waiting for. The count resets to zero once
+            the job finishes, so the app samples it on every status check and records how long
+            each run waited. That wait is the largest single source of federated variance: one
+            measured S3 search took 29.5&nbsp;s on its first run and about 1.1&nbsp;s afterwards.
+            The usual warm-up run absorbs most of it. In Analysis, <b>Compute wait</b> can exclude
+            runs that waited, or show only them so you can measure start-up latency on purpose.
+            The wait is sampled about twice a second, so a shorter wait can be missed. Lakehouse
+            and compute v1 jobs do not report it, and the app records them as &ldquo;not
+            reported&rdquo;, never as &ldquo;no wait&rdquo;.
+          </li>
+          <li>
+            <b>Comparing Lakehouse with federated</b> takes two saved searches, one for each copy
+            of the data (for example a Lakehouse dataset and the S3 bucket it was archived from).
+            Analysis and Compare look at one search at a time, so link the two first: open either
+            one on <b>Manage searches</b> and set its <b>Counterpart</b> to the other. Select both,
+            tick a size and Federated, and run one session. In Analysis or Compare, pick either
+            search and leave <b>Include counterpart</b> on. The pair is then read as one case:
+            each target&rsquo;s figures come from whichever search ran there, and the two are
+            never blended. Set <b>Compare against</b> to Federated (or to a size) to get the
+            head-to-head. If the two copies matched different numbers of events, both views say
+            so, because then the two searches did different work and the timings aren&rsquo;t a
+            like-for-like comparison.
           </li>
         </ul>
       </section>

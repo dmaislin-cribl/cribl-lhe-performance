@@ -29,7 +29,7 @@ describe('planSweep', () => {
 
   it('resizes down to the smallest size first when the engine starts large', () => {
     const plan = planSweep({ selected: ['small', 'large'], currentTier: 'large', ...shape });
-    expect(plan.steps[0]).toEqual({ tier: 'small', needsResize: true });
+    expect(plan.steps[0]).toMatchObject({ tier: 'small', needsResize: true });
     expect(plan.resizes).toBe(2);
   });
 
@@ -136,5 +136,57 @@ describe('formatDuration', () => {
   it('says unknown rather than printing NaN', () => {
     expect(formatDuration(null)).toBe('unknown');
     expect(formatDuration(Number.NaN)).toBe('unknown');
+  });
+});
+
+describe('federated target', () => {
+  it('runs Federated after every size and never resizes for it', () => {
+    const plan = planSweep({ selected: ['federated', 'large', 'small'], currentTier: 'small', ...shape });
+    expect(plan.steps.map((step) => step.tier)).toEqual(['small', 'large', 'federated']);
+    expect(plan.steps.map((step) => step.needsResize)).toEqual([false, true, false]);
+    expect(plan.resizes).toBe(1);
+  });
+
+  it('needs no resize at all when only Federated is selected', () => {
+    const plan = planSweep({ selected: ['federated'], currentTier: 'medium', ...shape });
+    expect(plan.resizes).toBe(0);
+    expect(plan.byRequest).toEqual([]);
+    expect(plan.unconfirmed).toEqual([]);
+  });
+
+  it('counts runs per step from the searches each target actually runs', () => {
+    const plan = planSweep({
+      selected: ['medium', 'federated'],
+      currentTier: 'medium',
+      searches: 3,
+      searchesFor: (tier) => (tier === 'federated' ? 2 : 1),
+      runsPerWindow: [4],
+    });
+    // (4 timed + 1 warm-up) × (1 Lakehouse search + 2 federated searches)
+    expect(plan.totalRuns).toBe(15);
+    expect(plan.steps.map((step) => step.searches)).toEqual([1, 2]);
+  });
+
+  it('refuses a target that would time nothing', () => {
+    const plan = planSweep({
+      selected: ['medium', 'federated'],
+      currentTier: 'medium',
+      searches: 1,
+      searchesFor: (tier) => (tier === 'federated' ? 0 : 1),
+      runsPerWindow: [4],
+    });
+    expect(validateSweep({ selected: ['medium', 'federated'], hasSearches: true, steps: plan.steps })).toMatch(
+      /Federated is ticked/,
+    );
+    const sizesOnly = planSweep({
+      selected: ['medium'],
+      currentTier: 'medium',
+      searches: 1,
+      searchesFor: () => 0,
+      runsPerWindow: [4],
+    });
+    expect(validateSweep({ selected: ['medium'], hasSearches: true, steps: sizesOnly.steps })).toMatch(
+      /federated data/,
+    );
   });
 });

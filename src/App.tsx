@@ -36,13 +36,25 @@ import {
 } from './api/searches';
 import {
   BASELINE_TIER,
+  FEDERATED,
   canonicalTier,
   describeTier,
+  isFederated,
   labelTier,
   mergeDiscoveredTiers,
   tierDef,
   tierIndex,
 } from './api/tiers';
+import {
+  attributeRun,
+  buildCatalog,
+  classifySearch,
+  describeCompute,
+  waitedForCompute,
+  runsOnTarget,
+  type DatasetCatalog,
+  type SearchPlacement,
+} from './api/federated';
 import {
   MAX_SESSION_NAME,
   endSession,
@@ -78,6 +90,23 @@ const RESIZE_TIMEOUT_MS = 30 * 60_000;
 
 /** Per-resize allowance in the wall-clock estimate. Deliberately pessimistic. */
 const RESIZE_SETTLE_SEC = 180;
+
+/** Where each selected search will run, as the searches card labels it. */
+const PLACEMENT_LABEL: Record<SearchPlacement, string> = {
+  lakehouse: 'Lakehouse',
+  federated: 'Federated',
+  mixed: 'Mixed',
+  unknown: 'Unclassified',
+};
+
+const PLACEMENT_HINT: Record<SearchPlacement, string> = {
+  lakehouse: 'Reads a Lakehouse dataset: measured on the engine sizes you tick.',
+  federated:
+    'Reads remote data (S3, Azure Blob, GCS, Lake, Edge, API …): measured on Federated only — no engine size changes how it runs.',
+  mixed: 'Reads both Lakehouse and federated datasets: measured on every target you tick.',
+  unknown:
+    'The dataset could not be classified (wildcard, no dataset= term, or catalog unavailable): measured on every target, and filed by where the server says it actually ran.',
+};
 
 function runId(): string {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
@@ -160,6 +189,19 @@ export default function App() {
   const [advanced, setAdvanced] = useState(false);
   /** Session id the run table is narrowed to, or '' for every run. */
   const [runFilter, setRunFilter] = useState('');
+  /**
+   * Dataset catalog, used to sort selected searches into Lakehouse and federated
+   * before a run. Null until loaded, or when the read failed — in which case
+   * every search is "unknown", runs on every target, and is attributed from the
+   * server's job record afterwards.
+   */
+  const [catalog, setCatalog] = useState<DatasetCatalog | null>(null);
+  /**
+   * Which target the results table shows. '' follows the engine's live size, as
+   * the table always did; Federated has to be picked, since it is never "the
+   * size the engine is on".
+   */
+  const [viewTarget, setViewTarget] = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -196,6 +238,38 @@ export default function App() {
   const shownRuns = useMemo(
     () => (runFilter ? runs.filter((run) => run.sessionId === runFilter) : runs),
     [runs, runFilter],
+  );
+
+  /**
+   * Read once per search group. Failure is not an error worth a banner: the
+   * classification it feeds is advisory, and attribution from the job record
+   * still files every run correctly.
+   */
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch(`${apiUrl().replace(/\/$/, '')}/m/${encodeURIComponent(searchGroup)}/search/datasets`, {
+      signal: controller.signal,
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { items?: unknown } | null) => setCatalog(body ? buildCatalog(body.items) : null))
+      .catch(() => {
+        if (!controller.signal.aborted) setCatalog(null);
+      });
+    return () => controller.abort();
+  }, [searchGroup]);
+
+  /** Where each selected search is expected to run. */
+  const placements = useMemo(() => {
+    const map = new Map<string, SearchPlacement>();
+    for (const search of chosen) map.set(search.id, classifySearch(search.text, catalog));
+    return map;
+  }, [chosen, catalog]);
+
+  /** Selected searches a target should run — see `runsOnTarget`. */
+  const searchesForTarget = useCallback(
+    (target: string) =>
+      chosen.filter((search) => runsOnTarget(placements.get(search.id) ?? 'unknown', target)),
+    [chosen, placements],
   );
 
   useEffect(() => {
@@ -417,6 +491,8 @@ export default function App() {
       window: ReturnType<typeof resolveWindows>[number],
       measured: boolean,
       tier: string,
+      /** The Lakehouse size the engine is on now, for runs the server says ran locally. */
+      engineTier: string,
       session: SessionRecord,
       signal: AbortSignal,
     ) => {
@@ -449,9 +525,14 @@ export default function App() {
           searchGroup: config.searchGroup,
           signal,
         });
+        const { insight, computeWait } = result;
+        // Filed by what the server says ran, not by what was planned — a size
+        // sweep that launched an S3 search must not record it as a size.
+        const attributed = attributeRun({ planned: tier, path: insight.path, engineTier });
         appendRun(
           {
             ...base,
+            engine: attributed.target,
             jobId: result.jobId,
             totalMs: result.totalMs,
             engineMs: result.engineMs,
@@ -459,7 +540,19 @@ export default function App() {
             clientMs: Math.round(result.clientMs),
             totalEventCount: result.totalEventCount,
             status: 'Success',
-            notes: measured ? '' : 'Warm-up',
+            notes: [measured ? '' : 'Warm-up', attributed.note].filter(Boolean).join(' · '),
+            path: insight.path,
+            billableCpuMs: insight.billableCpuMs,
+            totalCpuMs: insight.totalCpuMs,
+            executors: insight.executors,
+            // Null, not zero, when the job never reported node statuses: a v1 or
+            // Lakehouse job did not "wait 0 s", it just did not say.
+            computeCold: computeWait.reported ? computeWait.peakCold : null,
+            computeWarm: computeWait.reported ? computeWait.peakWarm : null,
+            computeWaitMs: computeWait.reported ? computeWait.waitMs : null,
+            providerTypes: insight.providerTypes,
+            computeTypes: insight.computeTypes,
+            cache: insight.cache,
           },
           query,
         );
@@ -541,7 +634,7 @@ export default function App() {
         windowRepetitions: Object.fromEntries(
           resolved.map((window) => [window.id, repetitionsFor(config, window.id)]),
         ),
-        notes: sweeping ? `Engine size sweep: ${describeSweep(plan)}` : '',
+        notes: sweeping ? `Sweep: ${describeSweep(plan)}` : '',
       });
       writeSession(session);
       // Cleared so the next session gets a fresh suggestion rather than silently
@@ -562,20 +655,22 @@ export default function App() {
             await requestResize(target!.id, step.tier);
             await awaitTier(target!.id, step.tier, controller.signal);
           }
-          currentTier = step.tier;
-          for (const search of chosen) {
+          // Federated does not move the engine, so the size it is on stays the
+          // one the restore below compares against.
+          if (!isFederated(step.tier)) currentTier = step.tier;
+          for (const search of searchesForTarget(step.tier)) {
             for (const window of resolved) {
               setProgress(
                 `${session.name} · ${stepLabel}${search.name} · ${window.id} on ${labelTier(step.tier)} · warm-up (${done}/${plan.totalRuns} searches run)`,
               );
-              await runOnce(search, window, false, step.tier, session, controller.signal);
+              await runOnce(search, window, false, step.tier, currentTier, session, controller.signal);
               done += 1;
               const timed = repetitionsFor(config, window.id);
               for (let repetition = 0; repetition < timed; repetition += 1) {
                 setProgress(
                   `${session.name} · ${stepLabel}${search.name} · ${window.id} on ${labelTier(step.tier)} · run ${repetition + 1} of ${timed} (${done}/${plan.totalRuns} total)`,
                 );
-                await runOnce(search, window, true, step.tier, session, controller.signal);
+                await runOnce(search, window, true, step.tier, currentTier, session, controller.signal);
                 done += 1;
               }
             }
@@ -631,6 +726,7 @@ export default function App() {
       log.sessions,
       requestResize,
       runOnce,
+      searchesForTarget,
       sessionName,
       writeSession,
     ],
@@ -663,9 +759,13 @@ export default function App() {
    */
   const windows = config.windows;
 
+  /** The target the results table is showing. */
+  const shownTarget = viewTarget || activeTier;
+  const showingFederated = isFederated(shownTarget);
+
   const measured = useMemo(
-    () => runs.filter((run) => run.measured && run.engine === activeTier),
-    [runs, activeTier],
+    () => runs.filter((run) => run.measured && run.engine === shownTarget),
+    [runs, shownTarget],
   );
 
   /**
@@ -690,6 +790,11 @@ export default function App() {
           total: summarizeSamples(totals),
           engineMedian: medianOf(ok.map((run) => run.engineMs)),
           queueMedian: medianOf(ok.map((run) => run.queueMs)),
+          cpuMedian: medianOf(ok.map((run) => run.billableCpuMs ?? null)),
+          executorsMedian: medianOf(ok.map((run) => run.executors ?? null)),
+          // Counted only where the server reported node statuses at all.
+          coldRuns: ok.filter((run) => waitedForCompute(run.computeWaitMs) === true).length,
+          coldKnown: ok.filter((run) => waitedForCompute(run.computeWaitMs) !== null).length,
           errors: forRow.length - ok.length,
           consistent: countsAgree(counts),
           eventCount: counts.find((value) => typeof value === 'number') ?? null,
@@ -760,9 +865,10 @@ export default function App() {
         selected: sweepTiers,
         currentTier: activeTier,
         searches: chosen.length,
+        searchesFor: (tier) => searchesForTarget(tier).length,
         runsPerWindow: defs.map((def) => repetitionsFor(config, def.id)),
       }),
-    [sweepTiers, activeTier, chosen.length, config],
+    [sweepTiers, activeTier, chosen.length, config, searchesForTarget],
   );
 
   /** Median of every timed run so far, used only for the wall-clock estimate. */
@@ -785,6 +891,7 @@ export default function App() {
       const problem = validateSweep({
         selected: plan.steps.map((step) => step.tier),
         hasSearches: chosen.length > 0,
+        steps: plan.steps,
       });
       if (problem) {
         setError(problem);
@@ -805,11 +912,14 @@ export default function App() {
   const suggestedName = useMemo(
     () =>
       suggestSessionName({
-        tier: labelTier(activeTier),
+        tier:
+          sweepTiers.length === 1
+            ? labelTier(sweepTiers[0])
+            : `${sweepTiers.length} targets`,
         windowCount: 1,
         searchCount: Math.max(1, chosen.length),
       }),
-    [activeTier, chosen.length],
+    [sweepTiers, chosen.length],
   );
 
   return (
@@ -977,7 +1087,22 @@ export default function App() {
               <div className={s.searchName}>
                 <b>{search.name}</b>
                 <span className={s.muted}>{deriveDataset(search.text) || 'no dataset term'}</span>
+                <span
+                  className={s.tag}
+                  title={PLACEMENT_HINT[placements.get(search.id) ?? 'unknown']}
+                >
+                  {PLACEMENT_LABEL[placements.get(search.id) ?? 'unknown']}
+                </span>
               </div>
+              {/* Half a pair measured is half a comparison: say so before the run,
+                  not after it, when the missing column is already a re-run away. */}
+              {library && search.counterpartId && !chosen.some((entry) => entry.id === search.counterpartId) && (
+                <span className={s.muted}>
+                  Paired with “{library.searches.find((entry) => entry.id === search.counterpartId)?.name}”,
+                  which is not selected. Select it too to measure both copies of the data in this
+                  session.
+                </span>
+              )}
               <pre className={s.searchText}>{search.text}</pre>
             </div>
           ))}
@@ -995,10 +1120,11 @@ export default function App() {
         <section className={s.card}>
           <div className={s.cardHeader}>
             <div>
-              <h2>Engine sizes to test</h2>
+              <h2>What to test on</h2>
               <span className={s.muted}>
-                Tick every size this run should measure. The sweep always runs them smallest first,
-                resizing between them.
+                Tick every engine size this run should measure, and Federated for searches over remote
+                data. Sizes run smallest first, resizing between them; Federated runs last and never
+                resizes anything.
               </span>
             </div>
             {/* Coverage of the size the engine is on now — the one an operator is
@@ -1098,6 +1224,33 @@ export default function App() {
                 </div>
               );
             })}
+            {/* Not a size: no resize button, no capacity. It runs the selected
+                searches whose datasets are federated, on the federated executors. */}
+            <div className={`${s.tier} ${s.tierFederated}`}>
+              <input
+                type="checkbox"
+                className={s.tierPick}
+                checked={sweepTiers.includes(FEDERATED)}
+                disabled={running || (sweepTiers.includes(FEDERATED) && sweepTiers.length === 1)}
+                aria-label="Measure on Federated"
+                onChange={(event) =>
+                  setSweepTiers(
+                    event.target.checked
+                      ? [...sweepTiers, FEDERATED]
+                      : sweepTiers.filter((entry) => entry !== FEDERATED),
+                  )
+                }
+              />
+              <span>F</span>
+              <strong>Federated</strong>
+              <small>
+                {completedFor(FEDERATED)
+                  ? `${completedFor(FEDERATED)}/${target} timed · `
+                  : ''}
+                {searchesForTarget(FEDERATED).length} of {chosen.length} selected{' '}
+                {chosen.length === 1 ? 'search reads' : 'searches read'} remote data · no resize
+              </small>
+            </div>
           </div>
 
           {/* What pressing run will actually do, in one line, before it is pressed. */}
@@ -1128,13 +1281,23 @@ export default function App() {
       <section className={s.card}>
         <div className={s.cardHeader}>
           <div>
-            <h2>How long each search took — {labelTier(activeTier)}</h2>
+            <h2>How long each search took — {labelTier(shownTarget)}</h2>
             <span className={s.muted}>
               Server-measured, start to finish. <b>Typical</b> is the middle run: half were faster,
               half slower.
+              {showingFederated &&
+                ' Federated searches are billed per CPU-second, so the cost columns matter as much as the time.'}
             </span>
           </div>
           <div className={s.headerActions}>
+            <select
+              aria-label="Show results for"
+              value={viewTarget}
+              onChange={(event) => setViewTarget(event.target.value)}
+            >
+              <option value="">{labelTier(activeTier)} (engine now)</option>
+              <option value={FEDERATED}>Federated</option>
+            </select>
             <span className={s.tag}>{measured.length} timed runs</span>
             <button onClick={() => setAdvanced(!advanced)}>
               {advanced ? 'Hide statistics' : 'Show statistics'}
@@ -1152,6 +1315,19 @@ export default function App() {
               <th>Slowest</th>
               <th title="Part of the total spent waiting before the engine started">Of which queue</th>
               <th title="Part of the total spent executing on the engine">Of which engine</th>
+              {showingFederated && (
+                <>
+                  <th title="Median billable CPU-seconds per run — what a federated search costs">
+                    Billable CPU
+                  </th>
+                  <th title="Median executors the search fanned out to, coordinator excluded">
+                    Executors
+                  </th>
+                  <th title="Timed runs that spent time waiting for compute nodes, out of those whose job reported it (compute v1 does not). The main source of federated variance; Analysis can split them out.">
+                    Waited for compute
+                  </th>
+                </>
+              )}
               <th>Events</th>
               {advanced && (
                 <>
@@ -1180,6 +1356,13 @@ export default function App() {
                 <td>{formatSec(row.total.max)}</td>
                 <td className={s.muted}>{formatSec(row.queueMedian)}</td>
                 <td>{formatSec(row.engineMedian)}</td>
+                {showingFederated && (
+                  <>
+                    <td>{formatSec(row.cpuMedian)}</td>
+                    <td>{row.executorsMedian === null ? '—' : Math.round(row.executorsMedian)}</td>
+                    <td>{row.coldKnown ? `${row.coldRuns}/${row.coldKnown}` : '—'}</td>
+                  </>
+                )}
                 <td>{row.eventCount === null ? '—' : row.eventCount.toLocaleString()}</td>
                 {advanced && (
                   <>
@@ -1305,6 +1488,8 @@ export default function App() {
               <th>Total s</th>
               <th>Queue s</th>
               <th>Engine s</th>
+              <th title="Provider · federated compute version · cold/warm executors · cache">Compute</th>
+              <th title="Billable CPU-seconds">CPU s</th>
               <th>Events</th>
               <th>Status</th>
               <th>Notes</th>
@@ -1326,6 +1511,8 @@ export default function App() {
                 </td>
                 <td className={s.muted}>{formatSec(run.queueMs)}</td>
                 <td>{formatSec(run.engineMs)}</td>
+                <td className={s.muted}>{describeCompute(run) || '—'}</td>
+                <td>{formatSec(run.billableCpuMs ?? null)}</td>
                 <td>{run.totalEventCount === null ? '—' : run.totalEventCount.toLocaleString()}</td>
                 <td>
                   <span className={run.status === 'Success' ? s.success : s.failure}>
@@ -1427,7 +1614,12 @@ export default function App() {
               {pendingSweep.plan.steps.map((step) => (
                 <li key={step.tier}>
                   <b>{labelTier(step.tier)}</b>
-                  {step.needsResize ? ' — resize first' : ' — already the current size'}
+                  {isFederated(step.tier)
+                    ? ' — federated executors, no resize'
+                    : step.needsResize
+                      ? ' — resize first'
+                      : ' — already the current size'}
+                  {` · ${step.searches} ${step.searches === 1 ? 'search' : 'searches'}`}
                 </li>
               ))}
             </ol>
