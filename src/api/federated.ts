@@ -282,8 +282,28 @@ export interface DatasetGroup {
  * storage type, then anything that is neither (meta datasets such as `default`,
  * which resolve to other datasets). Ids sorted within a group; groups in a
  * fixed order so the list does not reshuffle between visits.
+ *
+ * With `only`, the picker for one test type: just the groups that test can
+ * run. A meta dataset is kept where its members resolve to (`default` →
+ * federated when it points at S3), and dropped when they resolve to both kinds
+ * or to nothing the catalog knows — it could not be said to belong to either.
  */
-export function groupDatasets(catalog: DatasetCatalog | null): DatasetGroup[] {
+export function groupDatasets(
+  catalog: DatasetCatalog | null,
+  only?: 'lakehouse' | 'federated',
+): DatasetGroup[] {
+  const all = allDatasetGroups(catalog);
+  if (!only || !catalog) return all;
+  return all
+    .map((group) =>
+      group.placement === 'other'
+        ? { ...group, ids: group.ids.filter((id) => classifyDataset(catalog, id) === only) }
+        : group,
+    )
+    .filter((group) => group.ids.length > 0 && (group.placement === only || group.placement === 'other'));
+}
+
+function allDatasetGroups(catalog: DatasetCatalog | null): DatasetGroup[] {
   if (!catalog) return [];
   const lakehouse: string[] = [];
   const other: string[] = [];

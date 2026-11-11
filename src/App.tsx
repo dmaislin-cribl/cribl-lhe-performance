@@ -51,6 +51,7 @@ import {
 import {
   attributeRun,
   buildCatalog,
+  classifyDataset,
   classifySearch,
   describeCompute,
   groupDatasets,
@@ -869,7 +870,19 @@ export default function App() {
   );
 
   const plannedRuns = runnable.length * (repetitionsFor(config, selectedDef.id) + 1);
-  const datasetGroups = useMemo(() => groupDatasets(catalog), [catalog]);
+  /**
+   * Only the datasets the current test type can run: a federated test is never
+   * offered a Lakehouse dataset, and a Lakehouse test never a federated one.
+   */
+  const datasetGroups = useMemo(
+    () => groupDatasets(catalog, federatedMode ? 'federated' : 'lakehouse'),
+    [catalog, federatedMode],
+  );
+  /** Every dataset this picker offers, for checking whether a search's current one is among them. */
+  const offeredDatasets = useMemo(
+    () => new Set(datasetGroups.flatMap((group) => group.ids)),
+    [datasetGroups],
+  );
 
   /**
    * Sizes the next run covers. Falls back to whatever the engine is on, so an
@@ -1178,7 +1191,12 @@ export default function App() {
           {chosen.map((search) => {
             const placement = placements.get(search.id) ?? 'unknown';
             const current = deriveDataset(search.text);
-            const inCatalog = Boolean(catalog?.has(current));
+            // Offered = valid for this test type. A dataset of the other kind is
+            // shown as a placeholder naming what it is, not as a selection.
+            const offered = offeredDatasets.has(current);
+            const otherKind = catalog?.has(current) && !offered
+              ? (classifyDataset(catalog, current) === 'lakehouse' ? 'Lakehouse' : 'federated')
+              : null;
             const skipped = !runnable.some((entry) => entry.id === search.id);
             return (
             <div className={`${s.searchItem} ${skipped ? s.searchSkipped : ''}`} key={search.id}>
@@ -1196,13 +1214,17 @@ export default function App() {
                   <label htmlFor={`dataset-${search.id}`}>Dataset</label>
                   <select
                     id={`dataset-${search.id}`}
-                    value={inCatalog ? current : ''}
+                    value={offered ? current : ''}
                     disabled={running}
                     onChange={(event) => void retarget(search, event.target.value)}
                   >
-                    {!inCatalog && (
+                    {!offered && (
                       <option value="">
-                        {current ? `${current} (not a single catalog dataset — edit in Manage searches)` : 'Choose a dataset…'}
+                        {otherKind
+                          ? `${current} (${otherKind}) — choose a ${federatedMode ? 'federated' : 'Lakehouse'} dataset`
+                          : current
+                            ? `${current} (not a single catalog dataset — edit in Manage searches)`
+                            : 'Choose a dataset…'}
                       </option>
                     )}
                     {datasetGroups.map((group) => (

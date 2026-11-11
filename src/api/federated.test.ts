@@ -240,3 +240,34 @@ describe('groupDatasets', () => {
     expect(groupDatasets(null)).toEqual([]);
   });
 });
+
+describe('groupDatasets for one test type', () => {
+  const catalog = buildCatalog([
+    { id: 'pos_lh', type: 'cribl_search', provider: 'lakehouse' },
+    { id: 'pos_s3', type: 's3' },
+    { id: 'blob', type: 'azure_blob' },
+    { id: 'default', type: 'cribl_meta', datasets: ['pos_s3'] },
+    { id: 'both', type: 'cribl_meta', datasets: ['pos_s3', 'pos_lh'] },
+  ]);
+
+  it('offers a federated test only federated datasets', async () => {
+    const { groupDatasets } = await import('./federated');
+    const ids = groupDatasets(catalog, 'federated').flatMap((group) => group.ids);
+    expect(ids.sort()).toEqual(['blob', 'default', 'pos_s3']);
+    expect(groupDatasets(catalog, 'federated').every((group) => group.placement !== 'lakehouse')).toBe(true);
+  });
+
+  it('offers a Lakehouse test only Lakehouse datasets', async () => {
+    const { groupDatasets } = await import('./federated');
+    expect(groupDatasets(catalog, 'lakehouse').map((group) => [group.label, group.ids])).toEqual([
+      ['Lakehouse', ['pos_lh']],
+    ]);
+  });
+
+  it('drops a meta dataset that spans both kinds from either picker', async () => {
+    const { groupDatasets } = await import('./federated');
+    for (const only of ['lakehouse', 'federated'] as const) {
+      expect(groupDatasets(catalog, only).flatMap((group) => group.ids)).not.toContain('both');
+    }
+  });
+});
